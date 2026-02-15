@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USB Vault</title>
+  <link rel="stylesheet" href="/web/styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+</head>
+<body>
+  <div class="bg-shape shape-a"></div>
+  <div class="bg-shape shape-b"></div>
+
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>USB Vault</h1>
+        <p>Secure drone media ingest, dedupe, and local gallery</p>
+      </div>
+      <div class="status" id="statusChip">Checking status...</div>
+    </header>
+
+    <section class="card hidden" id="setupCard">
+      <h2>Initial Setup</h2>
+      <p>Create your local account and choose the base storage location for imported files.</p>
+      <form id="setupForm">
+        <label>Username
+          <input type="text" name="username" required minlength="3" maxlength="64" pattern="[a-zA-Z0-9._-]+" />
+        </label>
+        <label>Password
+          <input type="password" name="password" required minlength="12" />
+        </label>
+        <label>Base Storage Directory (absolute path)
+          <input type="text" name="base_storage_dir" placeholder="/Users/you/USBVaultLibrary" required />
+        </label>
+        <button type="submit">Complete Setup</button>
+      </form>
+      <div class="error" id="setupError"></div>
+    </section>
+
+    <section class="card hidden" id="loginCard">
+      <h2>Login</h2>
+      <form id="loginForm">
+        <label>Username
+          <input type="text" name="username" required />
+        </label>
+        <label>Password
+          <input type="password" name="password" required />
+        </label>
+        <button type="submit">Sign In</button>
+      </form>
+      <div class="error" id="loginError"></div>
+    </section>
+
+    <section class="dashboard hidden" id="dashboard">
+      <div class="toolbar card">
+        <div>
+          <h2>Album</h2>
+          <p id="storageLabel"></p>
+        </div>
+        <div class="actions">
+          <button id="refreshBtn">Refresh</button>
+          <button id="logoutBtn" class="ghost">Logout</button>
+        </div>
+      </div>
+
+      <div class="layout">
+        <section class="card viewer">
+          <h3>Preview Player</h3>
+          <div id="previewPane" class="preview-empty">Select a file from the album.</div>
+        </section>
+
+        <section class="card">
+          <h3>Map</h3>
+          <div id="map"></div>
+        </section>
+      </div>
+
+      <section class="card">
+        <h3>Media Library</h3>
+        <div id="mediaGrid" class="media-grid"></div>
+      </section>
+
+      <section class="card">
+        <h3>Recent Audit Trail</h3>
+        <div id="auditTrail" class="audit-trail"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script type="module" src="/web/app.js"></script>
+</body>
+</html>
