@@ -36,6 +36,9 @@ type Manager struct {
 	logger     *log.Logger
 	jobs       chan string
 	processing sync.Map
+
+	statusMu sync.Mutex
+	status   Status
 }
 
 type Result struct {
@@ -45,14 +48,61 @@ type Result struct {
 	Errors     int `json:"errors"`
 }
 
+type Status struct {
+	State          string  `json:"state"` // idle, scanning, ingesting, error
+	Mount          string  `json:"mount"`
+	Phase          string  `json:"phase"` // scan, ingest
+	StartedAt      string  `json:"started_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	TotalFiles     int     `json:"total_files"`
+	ProcessedFiles int     `json:"processed_files"`
+	CopiedFiles    int     `json:"copied_files"`
+	Duplicates     int     `json:"duplicates"`
+	Errors         int     `json:"errors"`
+	TotalBytes     int64   `json:"total_bytes"`
+	CopiedBytes    int64   `json:"copied_bytes"`
+	Percent        float64 `json:"percent"`
+	FilesPerSec    float64 `json:"files_per_sec"`
+	MBps           float64 `json:"mbps"`
+	CurrentPath    string  `json:"current_path"`
+	Message        string  `json:"message"`
+	LastResult     Result  `json:"last_result"`
+}
+
 func NewManager(store *db.Store, auditLogger *audit.Logger, geocoder *geocode.ReverseGeocoder, logger *log.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		store:    store,
 		audit:    auditLogger,
 		geocoder: geocoder,
 		logger:   logger,
 		jobs:     make(chan string, 16),
 	}
+	m.status = Status{State: "idle"}
+	return m
+}
+
+func (m *Manager) GetStatus() Status {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+
+	st := m.status
+	// Derive rates and percent.
+	if st.StartedAt != "" {
+		if started, err := time.Parse(time.RFC3339Nano, st.StartedAt); err == nil {
+			elapsed := time.Since(started).Seconds()
+			if elapsed > 0 {
+				st.FilesPerSec = float64(st.ProcessedFiles) / elapsed
+				st.MBps = (float64(st.CopiedBytes) / elapsed) / (1024.0 * 1024.0)
+			}
+		}
+	}
+	if st.TotalFiles > 0 {
+		st.Percent = (float64(st.ProcessedFiles) / float64(st.TotalFiles)) * 100.0
+		if st.Percent > 100 {
+			st.Percent = 100
+		}
+	}
+	return st
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -114,8 +164,72 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		layout = normalizeStorageLayout(raw)
 	}
 
+	m.setStatus(Status{
+		State:     "scanning",
+		Mount:     mountPath,
+		Phase:     "scan",
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message:   "Scanning for media...",
+	})
+
 	_ = m.audit.Log(ctx, actor, "ingest_started", map[string]any{"mount": mountPath})
 
+	// First pass: count supported files and total bytes for percent/rate reporting.
+	var totalFiles int
+	var totalBytes int64
+	scanErr := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			result.Errors++
+			return nil
+		}
+
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		kind, supported := config.IsSupportedMedia(path)
+		if !supported {
+			return nil
+		}
+		_ = kind
+		result.Scanned++
+		totalFiles++
+		if info, err := os.Stat(path); err == nil {
+			totalBytes += info.Size()
+		}
+		if totalFiles%50 == 0 {
+			m.bumpStatus(func(st *Status) {
+				st.TotalFiles = totalFiles
+				st.TotalBytes = totalBytes
+				st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			})
+		}
+		return nil
+	})
+	if scanErr != nil {
+		m.bumpStatus(func(st *Status) {
+			st.State = "error"
+			st.Message = "Scan failed"
+			st.Errors++
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
+		return result, scanErr
+	}
+
+	m.bumpStatus(func(st *Status) {
+		st.State = "ingesting"
+		st.Phase = "ingest"
+		st.TotalFiles = totalFiles
+		st.TotalBytes = totalBytes
+		st.Message = "Ingesting media..."
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	})
+
+	// Second pass: ingest.
 	walkErr := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			result.Errors++
@@ -133,16 +247,35 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		if !supported {
 			return nil
 		}
-		result.Scanned++
+
+		m.bumpStatus(func(st *Status) {
+			st.CurrentPath = path
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
 
 		if err := m.ingestFile(ctx, mountPath, baseStorage, layout, path, kind, actor, &result); err != nil {
 			result.Errors++
 			m.logger.Printf("ingest file error %s: %v", path, err)
 		}
+
+		m.bumpStatus(func(st *Status) {
+			st.ProcessedFiles++
+			st.CopiedFiles = result.Copied
+			st.Duplicates = result.Duplicates
+			st.Errors = result.Errors
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
+
 		return nil
 	})
 
 	if walkErr != nil {
+		m.bumpStatus(func(st *Status) {
+			st.State = "error"
+			st.Message = "Ingest failed"
+			st.Errors++
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
 		return result, walkErr
 	}
 
@@ -153,7 +286,29 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		"duplicates": result.Duplicates,
 		"errors":     result.Errors,
 	})
+
+	m.setStatus(Status{
+		State:      "idle",
+		Mount:      "",
+		Phase:      "",
+		StartedAt:  "",
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Message:    "Idle",
+		LastResult: result,
+	})
 	return result, nil
+}
+
+func (m *Manager) setStatus(st Status) {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	m.status = st
+}
+
+func (m *Manager) bumpStatus(update func(st *Status)) {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	update(&m.status)
 }
 
 func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout, srcPath, kind, actor string, result *Result) error {
@@ -233,6 +388,10 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime()); err != nil {
 		return err
 	}
+	m.bumpStatus(func(st *Status) {
+		st.CopiedBytes += info.Size()
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	})
 	rec.DestPath = destPath
 
 	if err := m.store.InsertMedia(ctx, rec); err != nil {

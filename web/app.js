@@ -10,6 +10,12 @@ const previewPane = document.querySelector('#previewPane');
 const auditTrail = document.querySelector('#auditTrail');
 const activeFilter = document.querySelector('#activeFilter');
 
+const ingestWidget = document.querySelector('#ingestWidget');
+const ingestRing = document.querySelector('#ingestRing');
+const ingestRingLabel = document.querySelector('#ingestRingLabel');
+const ingestTitle = document.querySelector('#ingestTitle');
+const ingestSub = document.querySelector('#ingestSub');
+
 const placesState = document.querySelector('#placesState');
 const placesCounty = document.querySelector('#placesCounty');
 const placesCity = document.querySelector('#placesCity');
@@ -31,6 +37,7 @@ let mapLayer;
 let mapFull;
 let mapFullLayer;
 let lastPoints = [];
+let ingestPoller;
 
 const locFilter = {
   state: '',
@@ -112,18 +119,21 @@ async function refreshAuthState() {
   if (!status.has_users) {
     statusChip.textContent = 'Setup required';
     setupCard.classList.remove('hidden');
+    stopIngestPolling();
     return;
   }
 
   if (!status.authenticated) {
     statusChip.textContent = 'Login required';
     loginCard.classList.remove('hidden');
+    stopIngestPolling();
     return;
   }
 
   statusChip.textContent = 'Authenticated';
   storageLabel.textContent = `Storage: ${status.storage_dir || 'Not configured'}`;
   dashboard.classList.remove('hidden');
+  startIngestPolling();
   await loadDashboardData();
 }
 
@@ -390,4 +400,68 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function startIngestPolling() {
+  if (ingestPoller) return;
+  ingestPoller = setInterval(() => {
+    refreshIngestStatus().catch(() => {});
+  }, 1000);
+  refreshIngestStatus().catch(() => {});
+}
+
+function stopIngestPolling() {
+  if (!ingestPoller) return;
+  clearInterval(ingestPoller);
+  ingestPoller = undefined;
+}
+
+async function refreshIngestStatus() {
+  if (!ingestWidget) return;
+  const st = await api('/api/ingest-status');
+  renderIngestStatus(st);
+}
+
+function renderIngestStatus(st) {
+  const state = (st.state || 'idle').toLowerCase();
+  const phase = st.phase || '';
+
+  let title = 'Idle';
+  let label = 'Idle';
+  let sub = 'Waiting for USB...';
+  let p = 0;
+
+  if (state === 'scanning') {
+    title = 'Scanning';
+    label = '...';
+    sub = `${st.total_files || 0} files found`;
+  } else if (state === 'ingesting') {
+    title = 'Ingesting';
+    p = Number(st.percent || 0);
+    const total = st.total_files || 0;
+    const done = st.processed_files || 0;
+    label = total > 0 ? `${Math.floor(p)}%` : '...';
+
+    const fps = Number(st.files_per_sec || 0);
+    const mbps = Number(st.mbps || 0);
+    sub = `${done}/${total} files | ${fps.toFixed(1)} files/s | ${mbps.toFixed(1)} MB/s`;
+  } else if (state === 'error') {
+    title = 'Error';
+    label = '!';
+    sub = st.message || 'Ingest error';
+  } else {
+    if (st.last_result && (st.last_result.copied || st.last_result.duplicates || st.last_result.errors)) {
+      title = 'Idle';
+      label = 'Idle';
+      sub = `Last: copied ${st.last_result.copied}, dup ${st.last_result.duplicates}, err ${st.last_result.errors}`;
+    }
+  }
+
+  if (ingestRing) ingestRing.style.setProperty('--p', Math.max(0, Math.min(100, p)));
+  if (ingestRingLabel) ingestRingLabel.textContent = label;
+  if (ingestTitle) ingestTitle.textContent = title;
+  if (ingestSub) ingestSub.textContent = sub;
+
+  // Tooltip with current file path if available.
+  if (ingestWidget) ingestWidget.title = st.current_path || '';
 }

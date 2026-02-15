@@ -160,6 +160,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServer(http.Dir(a.webDir))))
 
 	mux.HandleFunc("GET /api/status", a.handleStatus)
+	mux.HandleFunc("GET /api/ingest-status", a.withAuth(a.handleIngestStatus))
 	mux.HandleFunc("POST /api/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/login", a.handleLogin)
 	mux.HandleFunc("POST /api/logout", a.handleLogout)
@@ -210,6 +211,11 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"storage_dir":   storageDir,
 		"authenticated": authed,
 	})
+}
+
+func (a *App) handleIngestStatus(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	writeJSON(w, http.StatusOK, a.ingestor.GetStatus())
 }
 
 type setupRequest struct {

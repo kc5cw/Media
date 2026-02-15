@@ -17,7 +17,18 @@
         <h1>USB Vault</h1>
         <p>Secure drone media ingest, dedupe, and local gallery</p>
       </div>
-      <div class="status" id="statusChip">Checking status...</div>
+      <div class="top-status">
+        <div class="ingest-widget" id="ingestWidget">
+          <div class="ring" id="ingestRing" style="--p:0;">
+            <div class="ring-inner" id="ingestRingLabel">Idle</div>
+          </div>
+          <div class="ingest-meta">
+            <div class="ingest-title" id="ingestTitle">Idle</div>
+            <div class="ingest-sub" id="ingestSub">Waiting for USB...</div>
+          </div>
+        </div>
+        <div class="status" id="statusChip">Checking status...</div>
+      </div>
     </header>
 
     <section class="card hidden" id="setupCard">
