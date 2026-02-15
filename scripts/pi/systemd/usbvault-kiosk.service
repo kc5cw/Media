@@ -1,0 +1,17 @@
+[Unit]
+Description=USB Vault kiosk UI (auto HDMI or touchscreen)
+After=graphical.target usbvault.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Requires a desktop session running on :0 (X11) or appropriate environment.
+# You may need to adjust DISPLAY/XAUTHORITY depending on your Pi OS setup.
+Environment=DISPLAY=:0
+# Environment=XAUTHORITY=%h/.Xauthority
+
+ExecStart=/usr/local/bin/usbvault-kiosk
+
+[Install]
+WantedBy=graphical.target

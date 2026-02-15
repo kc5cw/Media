@@ -1,0 +1,24 @@
+[Unit]
+Description=USB Vault server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/usbvaultd
+Restart=on-failure
+RestartSec=2
+
+Environment=USBVAULT_BIND=127.0.0.1
+Environment=USBVAULT_PORT=4987
+
+# Store data under user config dir via default logic, or override explicitly:
+# Environment=USBVAULT_DATA_DIR=/var/lib/usbvault/data
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=%h/.config/USBVault
+
+[Install]
+WantedBy=default.target

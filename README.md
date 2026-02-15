@@ -22,6 +22,7 @@ It detects removable drives, scans for image/video media, extracts metadata (EXI
 4. Launch `USB Vault.app` from Finder or Spotlight.
 5. Your browser opens automatically to `http://127.0.0.1:4987`.
 
+## Raspberry Pi (HDMI + Touchscreen Kiosk)\n+\n+USB Vault can run headless on a Pi, or it can launch a local kiosk UI if a display is connected.\n+\n+Behavior on Pi (Linux):\n+\n+- If HDMI is connected: show the standard UI (same as macOS).\n+- If a touchscreen is detected and HDMI is not connected: show a touch-optimized UI.\n+\n+Install instructions (manual):\n+\n+- See `scripts/pi/install.md`.\n+\n+Important note:\n+\n+- GPIO pins do not carry video by themselves; most “GPIO tiny screens” are SPI/DSI displays that still appear to Linux as a framebuffer device.\n+\n ## First-Time Setup
 ## First-Time Setup
 
 1. Create a local username/password.
