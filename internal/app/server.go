@@ -65,7 +65,7 @@ func New(logger *log.Logger) (*App, error) {
 		ingestor:   ingestor,
 		logger:     logger,
 		sessionTTL: time.Duration(config.DefaultSessionTTLHours) * time.Hour,
-		webDir:     filepath.Join("web"),
+		webDir:     resolveWebDir(),
 	}
 
 	interval := time.Duration(config.USBScanIntervalSeconds()) * time.Second
@@ -548,6 +548,13 @@ func defaultBindAddr() string {
 		return v
 	}
 	return "127.0.0.1"
+}
+
+func resolveWebDir() string {
+	if raw := strings.TrimSpace(os.Getenv("USBVAULT_WEB_DIR")); raw != "" {
+		return raw
+	}
+	return filepath.Join("web")
 }
 
 func decodeJSONBody(r *http.Request, out any, maxBytes int64) error {

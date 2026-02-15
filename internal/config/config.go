@@ -58,6 +58,9 @@ func DataDir() string {
 	if raw := os.Getenv("USBVAULT_DATA_DIR"); raw != "" {
 		return raw
 	}
+	if cfgRoot, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(cfgRoot, "USBVault", "data")
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "data"
