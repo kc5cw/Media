@@ -39,6 +39,12 @@ let mapFullLayer;
 let lastPoints = [];
 let ingestPoller;
 
+function leaflet() {
+  // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
+  // may not be defined, so always resolve via window.
+  return window.L || window.leaflet;
+}
+
 const locFilter = {
   state: '',
   county: '',
@@ -48,7 +54,7 @@ const locFilter = {
 
 init().catch((err) => {
   console.error(err);
-  statusChip.textContent = 'Initialization error';
+  statusChip.textContent = `Initialization error: ${err?.message || err}`;
 });
 
 async function init() {
@@ -290,6 +296,12 @@ function renderPreview(item) {
 
 function renderMap(points) {
   lastPoints = points || [];
+  const L = leaflet();
+  if (!L) {
+    const el = document.getElementById('map');
+    if (el) el.innerHTML = '<div class="muted">Map unavailable (Leaflet failed to load).</div>';
+    return;
+  }
   if (!map) {
     map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -339,6 +351,12 @@ function openMapModal() {
   mapModal.classList.remove('hidden');
   mapModal.setAttribute('aria-hidden', 'false');
 
+  const L = leaflet();
+  if (!L) {
+    const el = document.getElementById('mapFull');
+    if (el) el.innerHTML = '<div class="muted">Map unavailable (Leaflet failed to load).</div>';
+    return;
+  }
   if (!mapFull) {
     mapFull = L.map('mapFull', { zoomControl: true }).setView([20, 0], 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -358,6 +376,8 @@ function closeMapModal() {
 }
 
 function renderMapFull(points) {
+  const L = leaflet();
+  if (!L) return;
   if (!mapFull) return;
   if (mapFullLayer) mapFull.removeLayer(mapFullLayer);
   mapFullLayer = L.layerGroup();

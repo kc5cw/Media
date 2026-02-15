@@ -625,7 +625,8 @@ func (a *App) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; font-src 'self' data:; connect-src 'self'; media-src 'self'; frame-ancestors 'none';")
+		// Leaflet is vendored under /web/vendor for offline use; map tiles may still be remote.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self'; media-src 'self'; frame-ancestors 'none';")
 		next.ServeHTTP(w, r)
 	})
 }
