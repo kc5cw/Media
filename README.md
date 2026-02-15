@@ -35,6 +35,7 @@ Data and logs on macOS:
 - App data: `~/Library/Application Support/USBVault/data`
 - Logs: `~/Library/Logs/USBVault/usbvault.log`
 
+## Storage Layout (On-Disk)\n+\n+By default, newly ingested files are stored in a location-first hierarchy that matches the UI:\n+\n+`<base>/State/County/City/Street/YYYY/MM/DD/<filename>_<hash>.<ext>`\n+\n+If GPS/geocoding is unavailable, files go under:\n+\n+`<base>/Unknown/YYYY/MM/DD/...`\n+\n+You can control this with the `storage_layout` setting in the app database:\n+\n+- `location_date` (default)\n+- `date`\n+\n+(UI toggle can be added if you want.)\n+\n ## Running From Source
 ## Running From Source
 
 Requirements:

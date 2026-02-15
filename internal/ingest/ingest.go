@@ -22,6 +22,12 @@ import (
 )
 
 const baseStorageSetting = "base_storage_dir"
+const storageLayoutSetting = "storage_layout"
+
+const (
+	storageLayoutDate         = "date"
+	storageLayoutLocationDate = "location_date"
+)
 
 type Manager struct {
 	store      *db.Store
@@ -103,6 +109,11 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		return result, nil
 	}
 
+	layout := storageLayoutLocationDate
+	if raw, ok, err := m.store.GetSetting(ctx, storageLayoutSetting); err == nil && ok {
+		layout = normalizeStorageLayout(raw)
+	}
+
 	_ = m.audit.Log(ctx, actor, "ingest_started", map[string]any{"mount": mountPath})
 
 	walkErr := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, walkErr error) error {
@@ -124,7 +135,7 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		}
 		result.Scanned++
 
-		if err := m.ingestFile(ctx, mountPath, baseStorage, path, kind, actor, &result); err != nil {
+		if err := m.ingestFile(ctx, mountPath, baseStorage, layout, path, kind, actor, &result); err != nil {
 			result.Errors++
 			m.logger.Printf("ingest file error %s: %v", path, err)
 		}
@@ -145,7 +156,7 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 	return result, nil
 }
 
-func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, srcPath, kind, actor string, result *Result) error {
+func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout, srcPath, kind, actor string, result *Result) error {
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return err
@@ -179,21 +190,12 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, srcPat
 		return nil
 	}
 
-	destPath, err := buildDestinationPath(baseStorage, capture, srcPath, shaHex)
-	if err != nil {
-		return err
-	}
-	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime()); err != nil {
-		return err
-	}
-
 	rec := &db.MediaRecord{
 		Kind:        kind,
 		FileName:    filepath.Base(srcPath),
 		Extension:   strings.ToLower(filepath.Ext(srcPath)),
 		SourceMount: mountPath,
 		SourcePath:  srcPath,
-		DestPath:    destPath,
 		SizeBytes:   info.Size(),
 		CRC32:       crcHex,
 		SHA256:      shaHex,
@@ -223,6 +225,15 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, srcPat
 			rec.DisplayName = toNullString(loc.DisplayName)
 		}
 	}
+
+	destPath, err := buildDestinationPath(baseStorage, layout, capture, srcPath, shaHex, rec)
+	if err != nil {
+		return err
+	}
+	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime()); err != nil {
+		return err
+	}
+	rec.DestPath = destPath
 
 	if err := m.store.InsertMedia(ctx, rec); err != nil {
 		_ = os.Remove(destPath)
@@ -260,13 +271,21 @@ func normalizeCaptureTime(raw string, fallback time.Time) string {
 	return fallback.UTC().Format(time.RFC3339)
 }
 
-func buildDestinationPath(baseStorage, capture, sourcePath, shaHex string) (string, error) {
+func buildDestinationPath(baseStorage, layout, capture, sourcePath, shaHex string, rec *db.MediaRecord) (string, error) {
 	tm, err := time.Parse(time.RFC3339, capture)
 	if err != nil {
 		tm = time.Now().UTC()
 	}
 
 	folder := filepath.Join(baseStorage, tm.Format("2006"), tm.Format("01"), tm.Format("02"))
+	if normalizeStorageLayout(layout) == storageLayoutLocationDate {
+		locParts := buildLocationFolderParts(rec)
+		if len(locParts) > 0 {
+			folder = filepath.Join(append([]string{baseStorage}, append(locParts, tm.Format("2006"), tm.Format("01"), tm.Format("02"))...)...)
+		} else {
+			folder = filepath.Join(baseStorage, "Unknown", tm.Format("2006"), tm.Format("01"), tm.Format("02"))
+		}
+	}
 	if err := os.MkdirAll(folder, 0o750); err != nil {
 		return "", err
 	}
@@ -296,6 +315,68 @@ func buildDestinationPath(baseStorage, capture, sourcePath, shaHex string) (stri
 	}
 
 	return "", errors.New("unable to allocate destination filename")
+}
+
+func normalizeStorageLayout(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	switch raw {
+	case storageLayoutDate:
+		return storageLayoutDate
+	case storageLayoutLocationDate:
+		return storageLayoutLocationDate
+	case "":
+		return storageLayoutLocationDate
+	default:
+		return storageLayoutLocationDate
+	}
+}
+
+func buildLocationFolderParts(rec *db.MediaRecord) []string {
+	parts := make([]string, 0, 4)
+	add := func(v sql.NullString) {
+		if !v.Valid {
+			return
+		}
+		name := sanitizeFolderName(v.String)
+		if name == "" {
+			return
+		}
+		parts = append(parts, name)
+	}
+	add(rec.State)
+	add(rec.County)
+	add(rec.City)
+	add(rec.Road)
+	return parts
+}
+
+func sanitizeFolderName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = strings.ReplaceAll(name, string(filepath.Separator), "_")
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == ' ':
+			return '_'
+		case r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	name = strings.Trim(name, "_.")
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return name
 }
 
 func copyFileAtomic(srcPath, dstPath string, srcMode fs.FileMode, modTime time.Time) error {
