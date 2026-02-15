@@ -52,6 +52,15 @@ type MediaRecord struct {
 	CameraYaw   sql.NullFloat64 `json:"camera_yaw"`
 	CameraPitch sql.NullFloat64 `json:"camera_pitch"`
 	CameraRoll  sql.NullFloat64 `json:"camera_roll"`
+	LocProvider sql.NullString  `json:"loc_provider"`
+	Country     sql.NullString  `json:"country"`
+	State       sql.NullString  `json:"state"`
+	County      sql.NullString  `json:"county"`
+	City        sql.NullString  `json:"city"`
+	Road        sql.NullString  `json:"road"`
+	HouseNumber sql.NullString  `json:"house_number"`
+	Postcode    sql.NullString  `json:"postcode"`
+	DisplayName sql.NullString  `json:"display_name"`
 	Metadata    string          `json:"metadata"`
 	SourceMTime string          `json:"source_mtime"`
 	IngestedAt  string          `json:"ingested_at"`
@@ -73,6 +82,43 @@ type AuditRecord struct {
 	Action  string `json:"action"`
 	Details string `json:"details"`
 	Hash    string `json:"hash"`
+}
+
+type GeocodeCacheEntry struct {
+	Provider    string
+	GeocodeKey  string
+	Country     string
+	State       string
+	County      string
+	City        string
+	Road        string
+	HouseNumber string
+	Postcode    string
+	DisplayName string
+	RawJSON     string
+	UpdatedAt   string
+}
+
+type MediaFilter struct {
+	State  string
+	County string
+	City   string
+	Road   string
+}
+
+type LocationGroup struct {
+	Name   string          `json:"name"`
+	Count  int64           `json:"count"`
+	MinLat sql.NullFloat64 `json:"min_lat"`
+	MinLon sql.NullFloat64 `json:"min_lon"`
+	MaxLat sql.NullFloat64 `json:"max_lat"`
+	MaxLon sql.NullFloat64 `json:"max_lon"`
+}
+
+type GeoTodo struct {
+	ID  int64
+	Lat float64
+	Lon float64
 }
 
 func Open(path string) (*Store, error) {
@@ -144,6 +190,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			camera_yaw REAL,
 			camera_pitch REAL,
 			camera_roll REAL,
+			loc_provider TEXT,
+			loc_country TEXT,
+			loc_state TEXT,
+			loc_county TEXT,
+			loc_city TEXT,
+			loc_road TEXT,
+			loc_house_number TEXT,
+			loc_postcode TEXT,
+			loc_display_name TEXT,
 			metadata_json TEXT NOT NULL,
 			source_mtime TEXT NOT NULL,
 			ingested_at TEXT NOT NULL,
@@ -167,11 +222,91 @@ func (s *Store) migrate(ctx context.Context) error {
 			config_json TEXT NOT NULL DEFAULT '{}',
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS geocode_cache (
+			provider TEXT NOT NULL,
+			geocode_key TEXT NOT NULL,
+			country TEXT,
+			state TEXT,
+			county TEXT,
+			city TEXT,
+			road TEXT,
+			house_number TEXT,
+			postcode TEXT,
+			display_name TEXT,
+			raw_json TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (provider, geocode_key)
+		);`,
 	}
 
 	for _, stmt := range schema {
 		if _, err := s.DB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("run migration: %w", err)
+		}
+	}
+
+	// For DBs created before we added location columns.
+	if err := s.ensureMediaLocationColumns(ctx); err != nil {
+		return err
+	}
+
+	if _, err := s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_media_loc_state ON media_files(loc_state);`); err != nil {
+		return err
+	}
+	if _, err := s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_media_loc_county ON media_files(loc_county);`); err != nil {
+		return err
+	}
+	if _, err := s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_media_loc_city ON media_files(loc_city);`); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) ensureMediaLocationColumns(ctx context.Context) error {
+	existing := map[string]struct{}{}
+	rows, err := s.DB.QueryContext(ctx, `PRAGMA table_info(media_files)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	cols := []struct {
+		name    string
+		typeDef string
+	}{
+		{"loc_provider", "TEXT"},
+		{"loc_country", "TEXT"},
+		{"loc_state", "TEXT"},
+		{"loc_county", "TEXT"},
+		{"loc_city", "TEXT"},
+		{"loc_road", "TEXT"},
+		{"loc_house_number", "TEXT"},
+		{"loc_postcode", "TEXT"},
+		{"loc_display_name", "TEXT"},
+	}
+
+	for _, col := range cols {
+		if _, ok := existing[col.name]; ok {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE media_files ADD COLUMN %s %s", col.name, col.typeDef)
+		if _, err := s.DB.ExecContext(ctx, stmt); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -305,10 +440,12 @@ func (s *Store) InsertMedia(ctx context.Context, rec *MediaRecord) error {
 
 	_, err := s.DB.ExecContext(ctx,
 		`INSERT INTO media_files (
-			kind, file_name, extension, source_mount, source_path, dest_path,
-			size_bytes, crc32, sha256, capture_time, gps_lat, gps_lon, make, model,
-			camera_yaw, camera_pitch, camera_roll, metadata_json, source_mtime, ingested_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				kind, file_name, extension, source_mount, source_path, dest_path,
+				size_bytes, crc32, sha256, capture_time, gps_lat, gps_lon, make, model,
+				camera_yaw, camera_pitch, camera_roll,
+				loc_provider, loc_country, loc_state, loc_county, loc_city, loc_road, loc_house_number, loc_postcode, loc_display_name,
+				metadata_json, source_mtime, ingested_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Kind,
 		rec.FileName,
 		rec.Extension,
@@ -326,6 +463,15 @@ func (s *Store) InsertMedia(ctx context.Context, rec *MediaRecord) error {
 		nullFloatToAny(rec.CameraYaw),
 		nullFloatToAny(rec.CameraPitch),
 		nullFloatToAny(rec.CameraRoll),
+		nullStringToAny(rec.LocProvider),
+		nullStringToAny(rec.Country),
+		nullStringToAny(rec.State),
+		nullStringToAny(rec.County),
+		nullStringToAny(rec.City),
+		nullStringToAny(rec.Road),
+		nullStringToAny(rec.HouseNumber),
+		nullStringToAny(rec.Postcode),
+		nullStringToAny(rec.DisplayName),
 		rec.Metadata,
 		rec.SourceMTime,
 		rec.IngestedAt,
@@ -334,6 +480,10 @@ func (s *Store) InsertMedia(ctx context.Context, rec *MediaRecord) error {
 }
 
 func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offset int) ([]MediaRecord, error) {
+	return s.ListMediaFiltered(ctx, sortBy, order, limit, offset, MediaFilter{})
+}
+
+func (s *Store) ListMediaFiltered(ctx context.Context, sortBy, order string, limit, offset int, filter MediaFilter) ([]MediaRecord, error) {
 	safeSort := "capture_time"
 	switch sortBy {
 	case "capture_time", "ingested_at", "file_name", "size_bytes", "kind":
@@ -344,16 +494,21 @@ func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offs
 		safeOrder = "ASC"
 	}
 
+	where, args := buildLocationWhere(filter)
+
 	query := fmt.Sprintf(`
-		SELECT id, kind, file_name, extension, source_path, dest_path, size_bytes, crc32, sha256,
+		SELECT id, kind, file_name, extension, source_mount, source_path, dest_path, size_bytes, crc32, sha256,
 		       capture_time, gps_lat, gps_lon, make, model, camera_yaw, camera_pitch, camera_roll,
+		       loc_provider, loc_country, loc_state, loc_county, loc_city, loc_road, loc_house_number, loc_postcode, loc_display_name,
 		       metadata_json, source_mtime, ingested_at
 		FROM media_files
+		WHERE %s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
-	`, safeSort, safeOrder)
+	`, where, safeSort, safeOrder)
 
-	rows, err := s.DB.QueryContext(ctx, query, limit, offset)
+	args = append(args, limit, offset)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +522,7 @@ func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offs
 			&rec.Kind,
 			&rec.FileName,
 			&rec.Extension,
+			&rec.SourceMount,
 			&rec.SourcePath,
 			&rec.DestPath,
 			&rec.SizeBytes,
@@ -380,6 +536,15 @@ func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offs
 			&rec.CameraYaw,
 			&rec.CameraPitch,
 			&rec.CameraRoll,
+			&rec.LocProvider,
+			&rec.Country,
+			&rec.State,
+			&rec.County,
+			&rec.City,
+			&rec.Road,
+			&rec.HouseNumber,
+			&rec.Postcode,
+			&rec.DisplayName,
 			&rec.Metadata,
 			&rec.SourceMTime,
 			&rec.IngestedAt,
@@ -394,8 +559,9 @@ func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offs
 
 func (s *Store) GetMediaByID(ctx context.Context, id int64) (*MediaRecord, error) {
 	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, kind, file_name, extension, source_path, dest_path, size_bytes, crc32, sha256,
+		SELECT id, kind, file_name, extension, source_mount, source_path, dest_path, size_bytes, crc32, sha256,
 		       capture_time, gps_lat, gps_lon, make, model, camera_yaw, camera_pitch, camera_roll,
+		       loc_provider, loc_country, loc_state, loc_county, loc_city, loc_road, loc_house_number, loc_postcode, loc_display_name,
 		       metadata_json, source_mtime, ingested_at
 		FROM media_files WHERE id = ?
 	`, id)
@@ -405,6 +571,7 @@ func (s *Store) GetMediaByID(ctx context.Context, id int64) (*MediaRecord, error
 		&rec.Kind,
 		&rec.FileName,
 		&rec.Extension,
+		&rec.SourceMount,
 		&rec.SourcePath,
 		&rec.DestPath,
 		&rec.SizeBytes,
@@ -418,6 +585,15 @@ func (s *Store) GetMediaByID(ctx context.Context, id int64) (*MediaRecord, error
 		&rec.CameraYaw,
 		&rec.CameraPitch,
 		&rec.CameraRoll,
+		&rec.LocProvider,
+		&rec.Country,
+		&rec.State,
+		&rec.County,
+		&rec.City,
+		&rec.Road,
+		&rec.HouseNumber,
+		&rec.Postcode,
+		&rec.DisplayName,
 		&rec.Metadata,
 		&rec.SourceMTime,
 		&rec.IngestedAt,
@@ -431,16 +607,26 @@ func (s *Store) GetMediaByID(ctx context.Context, id int64) (*MediaRecord, error
 }
 
 func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error) {
+	return s.ListMapPointsFiltered(ctx, limit, MediaFilter{})
+}
+
+func (s *Store) ListMapPointsFiltered(ctx context.Context, limit int, filter MediaFilter) ([]MapPoint, error) {
 	if limit <= 0 || limit > 5000 {
 		limit = 1000
 	}
-	rows, err := s.DB.QueryContext(ctx, `
+
+	where, args := buildLocationWhere(filter)
+	query := fmt.Sprintf(`
 		SELECT id, gps_lat, gps_lon, capture_time, file_name, kind
 		FROM media_files
 		WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+		  AND %s
 		ORDER BY capture_time DESC
 		LIMIT ?
-	`, limit)
+	`, where)
+
+	args = append(args, limit)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +641,113 @@ func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error
 		points = append(points, p)
 	}
 	return points, rows.Err()
+}
+
+func (s *Store) ListLocationGroups(ctx context.Context, level string, filter MediaFilter, limit int) ([]LocationGroup, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	var col string
+	switch level {
+	case "state":
+		col = "loc_state"
+	case "county":
+		col = "loc_county"
+	case "city":
+		col = "loc_city"
+	case "road":
+		col = "loc_road"
+	default:
+		return nil, fmt.Errorf("invalid level")
+	}
+
+	where, args := buildLocationWhere(filter)
+	query := fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(TRIM(%s), ''), 'Unknown') AS name,
+		       COUNT(1) AS count,
+		       MIN(gps_lat) AS min_lat, MIN(gps_lon) AS min_lon,
+		       MAX(gps_lat) AS max_lat, MAX(gps_lon) AS max_lon
+		FROM media_files
+		WHERE %s
+		GROUP BY name
+		ORDER BY count DESC, name ASC
+		LIMIT ?
+	`, col, where)
+
+	args = append(args, limit)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]LocationGroup, 0)
+	for rows.Next() {
+		var g LocationGroup
+		if err := rows.Scan(&g.Name, &g.Count, &g.MinLat, &g.MinLon, &g.MaxLat, &g.MaxLon); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListGeoTodos(ctx context.Context, limit int) ([]GeoTodo, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, gps_lat, gps_lon
+		FROM media_files
+		WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+		  AND (loc_state IS NULL AND loc_county IS NULL AND loc_city IS NULL AND loc_display_name IS NULL)
+		ORDER BY capture_time DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]GeoTodo, 0)
+	for rows.Next() {
+		var t GeoTodo
+		if err := rows.Scan(&t.ID, &t.Lat, &t.Lon); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateMediaLocation(ctx context.Context, id int64, rec *MediaRecord) error {
+	_, err := s.DB.ExecContext(ctx, `
+		UPDATE media_files SET
+			loc_provider = ?,
+			loc_country = ?,
+			loc_state = ?,
+			loc_county = ?,
+			loc_city = ?,
+			loc_road = ?,
+			loc_house_number = ?,
+			loc_postcode = ?,
+			loc_display_name = ?
+		WHERE id = ?
+	`,
+		nullStringToAny(rec.LocProvider),
+		nullStringToAny(rec.Country),
+		nullStringToAny(rec.State),
+		nullStringToAny(rec.County),
+		nullStringToAny(rec.City),
+		nullStringToAny(rec.Road),
+		nullStringToAny(rec.HouseNumber),
+		nullStringToAny(rec.Postcode),
+		nullStringToAny(rec.DisplayName),
+		id,
+	)
+	return err
 }
 
 func (s *Store) InsertAudit(ctx context.Context, ts, actor, action string, details any, prevHash, entryHash string) error {
@@ -507,6 +800,84 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)
 	return out, rows.Err()
 }
 
+func (s *Store) GetGeocodeCache(ctx context.Context, provider, geocodeKey string) (*GeocodeCacheEntry, bool, error) {
+	row := s.DB.QueryRowContext(ctx, `
+		SELECT provider, geocode_key, country, state, county, city, road, house_number, postcode, display_name, raw_json, updated_at
+		FROM geocode_cache
+		WHERE provider = ? AND geocode_key = ?
+	`, provider, geocodeKey)
+
+	var (
+		entry                        GeocodeCacheEntry
+		country, state, county, city sql.NullString
+		road, houseNumber, postcode  sql.NullString
+		displayName                  sql.NullString
+	)
+
+	if err := row.Scan(
+		&entry.Provider,
+		&entry.GeocodeKey,
+		&country,
+		&state,
+		&county,
+		&city,
+		&road,
+		&houseNumber,
+		&postcode,
+		&displayName,
+		&entry.RawJSON,
+		&entry.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	entry.Country = country.String
+	entry.State = state.String
+	entry.County = county.String
+	entry.City = city.String
+	entry.Road = road.String
+	entry.HouseNumber = houseNumber.String
+	entry.Postcode = postcode.String
+	entry.DisplayName = displayName.String
+
+	return &entry, true, nil
+}
+
+func (s *Store) UpsertGeocodeCache(ctx context.Context, entry *GeocodeCacheEntry) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO geocode_cache (
+			provider, geocode_key, country, state, county, city, road, house_number, postcode, display_name, raw_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, geocode_key) DO UPDATE SET
+			country = excluded.country,
+			state = excluded.state,
+			county = excluded.county,
+			city = excluded.city,
+			road = excluded.road,
+			house_number = excluded.house_number,
+			postcode = excluded.postcode,
+			display_name = excluded.display_name,
+			raw_json = excluded.raw_json,
+			updated_at = excluded.updated_at
+	`, entry.Provider, entry.GeocodeKey,
+		nullable(entry.Country),
+		nullable(entry.State),
+		nullable(entry.County),
+		nullable(entry.City),
+		nullable(entry.Road),
+		nullable(entry.HouseNumber),
+		nullable(entry.Postcode),
+		nullable(entry.DisplayName),
+		entry.RawJSON,
+		now,
+	)
+	return err
+}
+
 func nullFloatToAny(v sql.NullFloat64) any {
 	if v.Valid {
 		return v.Float64
@@ -519,4 +890,36 @@ func nullStringToAny(v sql.NullString) any {
 		return v.String
 	}
 	return nil
+}
+
+func nullable(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
+}
+
+func buildLocationWhere(filter MediaFilter) (string, []any) {
+	clauses := []string{"1=1"}
+	args := make([]any, 0)
+
+	apply := func(col, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if strings.EqualFold(value, "unknown") {
+			clauses = append(clauses, fmt.Sprintf("(%s IS NULL OR TRIM(%s) = '')", col, col))
+			return
+		}
+		clauses = append(clauses, fmt.Sprintf("%s = ?", col))
+		args = append(args, value)
+	}
+
+	apply("loc_state", filter.State)
+	apply("loc_county", filter.County)
+	apply("loc_city", filter.City)
+	apply("loc_road", filter.Road)
+
+	return strings.Join(clauses, " AND "), args
 }

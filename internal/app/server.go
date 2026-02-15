@@ -19,6 +19,7 @@ import (
 	"businessplan/usbvault/internal/audit"
 	"businessplan/usbvault/internal/config"
 	"businessplan/usbvault/internal/db"
+	"businessplan/usbvault/internal/geocode"
 	"businessplan/usbvault/internal/ingest"
 	"businessplan/usbvault/internal/security"
 	"businessplan/usbvault/internal/usb"
@@ -34,6 +35,7 @@ type App struct {
 	store      *db.Store
 	audit      *audit.Logger
 	ingestor   *ingest.Manager
+	geocoder   *geocode.ReverseGeocoder
 	watcher    *usb.Watcher
 	logger     *log.Logger
 	httpServer *http.Server
@@ -57,12 +59,14 @@ func New(logger *log.Logger) (*App, error) {
 		return nil, err
 	}
 	auditLogger := audit.New(store)
-	ingestor := ingest.NewManager(store, auditLogger, logger)
+	geocoder := geocode.New(store)
+	ingestor := ingest.NewManager(store, auditLogger, geocoder, logger)
 
 	application := &App{
 		store:      store,
 		audit:      auditLogger,
 		ingestor:   ingestor,
+		geocoder:   geocoder,
 		logger:     logger,
 		sessionTTL: time.Duration(config.DefaultSessionTTLHours) * time.Hour,
 		webDir:     resolveWebDir(),
@@ -90,6 +94,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.watcher.Start(ctx)
 
 	go a.sessionCleanupWorker(ctx)
+	go a.geocodeBackfillWorker(ctx)
 
 	mux := http.NewServeMux()
 	a.registerRoutes(mux)
@@ -111,6 +116,45 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
+func (a *App) geocodeBackfillWorker(ctx context.Context) {
+	if !geocode.Enabled() {
+		return
+	}
+
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			todos, err := a.store.ListGeoTodos(context.Background(), 30)
+			if err != nil || len(todos) == 0 {
+				continue
+			}
+			for _, t := range todos {
+				loc, err := a.geocoder.Reverse(context.Background(), t.Lat, t.Lon)
+				if err != nil || loc == nil {
+					continue
+				}
+				rec := &db.MediaRecord{
+					LocProvider: toNullString(loc.Provider),
+					Country:     toNullString(loc.Country),
+					State:       toNullString(loc.State),
+					County:      toNullString(loc.County),
+					City:        toNullString(loc.City),
+					Road:        toNullString(loc.Road),
+					HouseNumber: toNullString(loc.HouseNumber),
+					Postcode:    toNullString(loc.Postcode),
+					DisplayName: toNullString(loc.DisplayName),
+				}
+				_ = a.store.UpdateMediaLocation(context.Background(), t.ID, rec)
+			}
+		}
+	}
+}
+
 func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", a.handleIndex)
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServer(http.Dir(a.webDir))))
@@ -123,6 +167,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/media", a.withAuth(a.handleMediaList))
 	mux.HandleFunc("GET /api/media/{id}/content", a.withAuth(a.handleMediaContent))
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
+	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
 	mux.HandleFunc("GET /api/audit", a.withAuth(a.handleAudit))
 	mux.HandleFunc("POST /api/storage", a.withAuth(a.handleSetStorage))
 	mux.HandleFunc("POST /api/rescan", a.withAuth(a.handleRescan))
@@ -303,7 +348,13 @@ func (a *App) handleMediaList(w http.ResponseWriter, r *http.Request, authCtx *A
 	}
 	offset := (page - 1) * size
 
-	records, err := a.store.ListMedia(r.Context(), r.URL.Query().Get("sort"), r.URL.Query().Get("order"), size, offset)
+	filter := db.MediaFilter{
+		State:  r.URL.Query().Get("state"),
+		County: r.URL.Query().Get("county"),
+		City:   r.URL.Query().Get("city"),
+		Road:   r.URL.Query().Get("road"),
+	}
+	records, err := a.store.ListMediaFiltered(r.Context(), r.URL.Query().Get("sort"), r.URL.Query().Get("order"), size, offset, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
@@ -311,6 +362,7 @@ func (a *App) handleMediaList(w http.ResponseWriter, r *http.Request, authCtx *A
 
 	items := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
+		locationPath := buildLocationPath(rec)
 		items = append(items, map[string]any{
 			"id":           rec.ID,
 			"kind":         rec.Kind,
@@ -326,6 +378,12 @@ func (a *App) handleMediaList(w http.ResponseWriter, r *http.Request, authCtx *A
 			"camera_yaw":   nullFloat(rec.CameraYaw),
 			"camera_pitch": nullFloat(rec.CameraPitch),
 			"camera_roll":  nullFloat(rec.CameraRoll),
+			"state":        nullString(rec.State),
+			"county":       nullString(rec.County),
+			"city":         nullString(rec.City),
+			"road":         nullString(rec.Road),
+			"display_name": nullString(rec.DisplayName),
+			"location":     locationPath,
 			"metadata":     rec.Metadata,
 			"preview_url":  fmt.Sprintf("/api/media/%d/content", rec.ID),
 		})
@@ -364,12 +422,35 @@ func (a *App) handleMediaContent(w http.ResponseWriter, r *http.Request, authCtx
 
 func (a *App) handleMap(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
-	points, err := a.store.ListMapPoints(r.Context(), 2000)
+	filter := db.MediaFilter{
+		State:  r.URL.Query().Get("state"),
+		County: r.URL.Query().Get("county"),
+		City:   r.URL.Query().Get("city"),
+		Road:   r.URL.Query().Get("road"),
+	}
+	points, err := a.store.ListMapPointsFiltered(r.Context(), 2000, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+}
+
+func (a *App) handleLocationGroups(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	level := r.URL.Query().Get("level")
+	filter := db.MediaFilter{
+		State:  r.URL.Query().Get("state"),
+		County: r.URL.Query().Get("county"),
+		City:   r.URL.Query().Get("city"),
+		Road:   r.URL.Query().Get("road"),
+	}
+	groups, err := a.store.ListLocationGroups(r.Context(), level, filter, 200)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"level": level, "groups": groups})
 }
 
 func (a *App) handleAudit(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
@@ -610,6 +691,34 @@ func nullString(v sql.NullString) any {
 		return v.String
 	}
 	return nil
+}
+
+func toNullString(v string) sql.NullString {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: v, Valid: true}
+}
+
+func buildLocationPath(rec db.MediaRecord) string {
+	parts := make([]string, 0, 4)
+	if rec.State.Valid && strings.TrimSpace(rec.State.String) != "" {
+		parts = append(parts, strings.TrimSpace(rec.State.String))
+	}
+	if rec.County.Valid && strings.TrimSpace(rec.County.String) != "" {
+		parts = append(parts, strings.TrimSpace(rec.County.String))
+	}
+	if rec.City.Valid && strings.TrimSpace(rec.City.String) != "" {
+		parts = append(parts, strings.TrimSpace(rec.City.String))
+	}
+	if rec.Road.Valid && strings.TrimSpace(rec.Road.String) != "" {
+		parts = append(parts, strings.TrimSpace(rec.Road.String))
+	}
+	if len(parts) == 0 {
+		return "Unknown"
+	}
+	return strings.Join(parts, " / ")
 }
 
 func clientIP(r *http.Request) string {

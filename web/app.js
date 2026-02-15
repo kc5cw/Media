@@ -8,6 +8,18 @@ const storageLabel = document.querySelector('#storageLabel');
 const mediaGrid = document.querySelector('#mediaGrid');
 const previewPane = document.querySelector('#previewPane');
 const auditTrail = document.querySelector('#auditTrail');
+const activeFilter = document.querySelector('#activeFilter');
+
+const placesState = document.querySelector('#placesState');
+const placesCounty = document.querySelector('#placesCounty');
+const placesCity = document.querySelector('#placesCity');
+const placesRoad = document.querySelector('#placesRoad');
+const placeCrumb = document.querySelector('#placeCrumb');
+const clearPlaceBtn = document.querySelector('#clearPlaceBtn');
+
+const mapExpandBtn = document.querySelector('#mapExpandBtn');
+const mapModal = document.querySelector('#mapModal');
+const mapCloseBtn = document.querySelector('#mapCloseBtn');
 
 const setupForm = document.querySelector('#setupForm');
 const loginForm = document.querySelector('#loginForm');
@@ -16,6 +28,16 @@ const logoutBtn = document.querySelector('#logoutBtn');
 
 let map;
 let mapLayer;
+let mapFull;
+let mapFullLayer;
+let lastPoints = [];
+
+const locFilter = {
+  state: '',
+  county: '',
+  city: '',
+  road: ''
+};
 
 init().catch((err) => {
   console.error(err);
@@ -60,6 +82,24 @@ function bindEvents() {
     await api('/api/logout', { method: 'POST', body: {} });
     await refreshAuthState();
   });
+
+  clearPlaceBtn?.addEventListener('click', async () => {
+    locFilter.state = '';
+    locFilter.county = '';
+    locFilter.city = '';
+    locFilter.road = '';
+    await loadDashboardData();
+  });
+
+  mapExpandBtn?.addEventListener('click', () => {
+    openMapModal();
+  });
+  mapCloseBtn?.addEventListener('click', () => {
+    closeMapModal();
+  });
+  mapModal?.addEventListener('click', (e) => {
+    if (e.target === mapModal) closeMapModal();
+  });
 }
 
 async function refreshAuthState() {
@@ -88,21 +128,114 @@ async function refreshAuthState() {
 }
 
 async function loadDashboardData() {
+  await loadPlaces();
   const [mediaRes, mapRes, auditRes] = await Promise.all([
-    api('/api/media?size=180&sort=capture_time&order=desc'),
-    api('/api/map'),
+    api(`/api/media?size=180&sort=capture_time&order=desc${filterQuery('&')}`),
+    api(`/api/map${filterQuery('?')}`),
     api('/api/audit')
   ]);
 
+  renderFilterChip();
   renderMedia(mediaRes.items || []);
   renderMap(mapRes.points || []);
   renderAudit(auditRes.items || []);
 }
 
+async function loadPlaces() {
+  const stateRes = await api('/api/location-groups?level=state');
+  renderPlaceList(placesState, stateRes.groups || [], 'state');
+
+  if (locFilter.state) {
+    const countyRes = await api(`/api/location-groups?level=county&state=${encodeURIComponent(locFilter.state)}`);
+    renderPlaceList(placesCounty, countyRes.groups || [], 'county');
+  } else {
+    placesCounty.innerHTML = '<div class="muted">Select a state</div>';
+  }
+
+  if (locFilter.state && locFilter.county) {
+    const cityRes = await api(`/api/location-groups?level=city&state=${encodeURIComponent(locFilter.state)}&county=${encodeURIComponent(locFilter.county)}`);
+    renderPlaceList(placesCity, cityRes.groups || [], 'city');
+  } else {
+    placesCity.innerHTML = '<div class="muted">Select a county</div>';
+  }
+
+  if (locFilter.state && locFilter.county && locFilter.city) {
+    const roadRes = await api(`/api/location-groups?level=road&state=${encodeURIComponent(locFilter.state)}&county=${encodeURIComponent(locFilter.county)}&city=${encodeURIComponent(locFilter.city)}`);
+    renderPlaceList(placesRoad, roadRes.groups || [], 'road');
+  } else {
+    placesRoad.innerHTML = '<div class="muted">Select a city</div>';
+  }
+
+  renderCrumb();
+}
+
+function renderPlaceList(container, groups, level) {
+  container.innerHTML = '';
+  const slice = groups.slice(0, 100);
+  if (!slice.length) {
+    container.innerHTML = '<div class="muted">No data</div>';
+    return;
+  }
+
+  slice.forEach((g) => {
+    const row = document.createElement('div');
+    row.className = 'place-item';
+    row.innerHTML = `<div class="name" title="${escapeHtml(g.name)}">${escapeHtml(g.name)}</div><div class="count">${g.count}</div>`;
+    row.addEventListener('click', async () => {
+      if (level === 'state') {
+        locFilter.state = g.name;
+        locFilter.county = '';
+        locFilter.city = '';
+        locFilter.road = '';
+      } else if (level === 'county') {
+        locFilter.county = g.name;
+        locFilter.city = '';
+        locFilter.road = '';
+      } else if (level === 'city') {
+        locFilter.city = g.name;
+        locFilter.road = '';
+      } else if (level === 'road') {
+        locFilter.road = g.name;
+      }
+      await loadDashboardData();
+    });
+    container.appendChild(row);
+  });
+}
+
+function renderCrumb() {
+  const parts = [];
+  if (locFilter.state) parts.push(locFilter.state);
+  if (locFilter.county) parts.push(locFilter.county);
+  if (locFilter.city) parts.push(locFilter.city);
+  if (locFilter.road) parts.push(locFilter.road);
+  placeCrumb.textContent = parts.length ? `Selected: ${parts.join(' / ')}` : 'Selected: (none)';
+}
+
+function renderFilterChip() {
+  if (!activeFilter) return;
+  const parts = [];
+  if (locFilter.state) parts.push(`State: ${locFilter.state}`);
+  if (locFilter.county) parts.push(`County: ${locFilter.county}`);
+  if (locFilter.city) parts.push(`City: ${locFilter.city}`);
+  if (locFilter.road) parts.push(`Street: ${locFilter.road}`);
+  activeFilter.textContent = parts.length ? parts.join(' | ') : 'All media';
+}
+
+function filterQuery(prefix) {
+  const params = new URLSearchParams();
+  if (locFilter.state) params.set('state', locFilter.state);
+  if (locFilter.county) params.set('county', locFilter.county);
+  if (locFilter.city) params.set('city', locFilter.city);
+  if (locFilter.road) params.set('road', locFilter.road);
+  const q = params.toString();
+  return q ? `${prefix}${q}` : '';
+}
+
 function renderMedia(items) {
   mediaGrid.innerHTML = '';
   if (!items.length) {
-    mediaGrid.innerHTML = '<p>No media imported yet. Insert a USB drive to trigger ingestion.</p>';
+    mediaGrid.innerHTML = '<p>No media found for this filter.</p>';
     return;
   }
 
@@ -118,6 +251,7 @@ function renderMedia(items) {
       <div class="meta">
         <div title="${escapeHtml(item.file_name)}">${escapeHtml(item.file_name)}</div>
         <div>${new Date(item.capture_time).toLocaleString()}</div>
+        <div class="muted">${escapeHtml(item.location || '')}</div>
       </div>`;
 
     tile.addEventListener('click', () => renderPreview(item));
@@ -145,6 +279,7 @@ function renderPreview(item) {
 }
 
 function renderMap(points) {
+  lastPoints = points || [];
   if (!map) {
     map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -187,6 +322,46 @@ function renderAudit(items) {
     row.textContent = `${new Date(item.ts).toLocaleString()} | ${item.actor} | ${item.action}`;
     auditTrail.appendChild(row);
   });
+}
+
+function openMapModal() {
+  if (!mapModal) return;
+  mapModal.classList.remove('hidden');
+  mapModal.setAttribute('aria-hidden', 'false');
+
+  if (!mapFull) {
+    mapFull = L.map('mapFull', { zoomControl: true }).setView([20, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(mapFull);
+  }
+
+  renderMapFull(lastPoints);
+  setTimeout(() => mapFull.invalidateSize(), 50);
+}
+
+function closeMapModal() {
+  if (!mapModal) return;
+  mapModal.classList.add('hidden');
+  mapModal.setAttribute('aria-hidden', 'true');
+}
+
+function renderMapFull(points) {
+  if (!mapFull) return;
+  if (mapFullLayer) mapFull.removeLayer(mapFullLayer);
+  mapFullLayer = L.layerGroup();
+  const bounds = [];
+  (points || []).forEach((p) => {
+    if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return;
+    const marker = L.marker([p.lat, p.lon]).bindPopup(`${escapeHtml(p.file_name)}<br/>${new Date(p.capture_time).toLocaleString()}`);
+    marker.addTo(mapFullLayer);
+    bounds.push([p.lat, p.lon]);
+  });
+  mapFullLayer.addTo(mapFull);
+  if (bounds.length) {
+    mapFull.fitBounds(bounds, { padding: [20, 20] });
+  }
 }
 
 async function api(url, options = {}) {

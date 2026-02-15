@@ -91,6 +91,23 @@ html, body {
   backdrop-filter: blur(10px);
 }
 
+.cardhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cardhead h3 {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 h2, h3 {
   margin-top: 0;
 }
@@ -126,6 +143,12 @@ button.ghost {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
+}
+
+button.small {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.86rem;
 }
 
 .error {
@@ -176,6 +199,89 @@ button.ghost {
 #map {
   width: 100%;
   height: 290px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.browse-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 2.1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.places h4 {
+  margin: 0 0 8px;
+  font-size: 0.86rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.places-cols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.places-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.place-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(145, 176, 220, 0.18);
+  background: rgba(7, 11, 20, 0.65);
+  cursor: pointer;
+}
+
+.place-item:hover {
+  border-color: rgba(61, 208, 255, 0.7);
+}
+
+.place-item .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.place-item .count {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.crumb {
+  color: var(--muted);
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 12, 0.72);
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.modal-inner {
+  width: min(1100px, 100%);
+}
+
+.map-full {
+  width: 100%;
+  height: min(78vh, 820px);
   border-radius: 12px;
   border: 1px solid var(--border);
   overflow: hidden;
@@ -240,6 +346,10 @@ button.ghost {
   }
 
   .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .browse-layout {
     grid-template-columns: 1fr;
   }
 

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"businessplan/usbvault/internal/audit"
 	"businessplan/usbvault/internal/config"
 	"businessplan/usbvault/internal/db"
+	"businessplan/usbvault/internal/geocode"
 	"businessplan/usbvault/internal/media"
 )
 
@@ -24,6 +26,7 @@ const baseStorageSetting = "base_storage_dir"
 type Manager struct {
 	store      *db.Store
 	audit      *audit.Logger
+	geocoder   *geocode.ReverseGeocoder
 	logger     *log.Logger
 	jobs       chan string
 	processing sync.Map
@@ -36,12 +39,13 @@ type Result struct {
 	Errors     int `json:"errors"`
 }
 
-func NewManager(store *db.Store, auditLogger *audit.Logger, logger *log.Logger) *Manager {
+func NewManager(store *db.Store, auditLogger *audit.Logger, geocoder *geocode.ReverseGeocoder, logger *log.Logger) *Manager {
 	return &Manager{
-		store:  store,
-		audit:  auditLogger,
-		logger: logger,
-		jobs:   make(chan string, 16),
+		store:    store,
+		audit:    auditLogger,
+		geocoder: geocoder,
+		logger:   logger,
+		jobs:     make(chan string, 16),
 	}
 }
 
@@ -206,6 +210,20 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, srcPat
 		IngestedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
+	if meta.GPSLat.Valid && meta.GPSLon.Valid {
+		if loc, err := m.geocoder.Reverse(ctx, meta.GPSLat.Float64, meta.GPSLon.Float64); err == nil && loc != nil {
+			rec.LocProvider = toNullString(loc.Provider)
+			rec.Country = toNullString(loc.Country)
+			rec.State = toNullString(loc.State)
+			rec.County = toNullString(loc.County)
+			rec.City = toNullString(loc.City)
+			rec.Road = toNullString(loc.Road)
+			rec.HouseNumber = toNullString(loc.HouseNumber)
+			rec.Postcode = toNullString(loc.Postcode)
+			rec.DisplayName = toNullString(loc.DisplayName)
+		}
+	}
+
 	if err := m.store.InsertMedia(ctx, rec); err != nil {
 		_ = os.Remove(destPath)
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -223,6 +241,14 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, srcPat
 		"capture_time": capture,
 	})
 	return nil
+}
+
+func toNullString(v string) sql.NullString {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: v, Valid: true}
 }
 
 func normalizeCaptureTime(raw string, fallback time.Time) string {

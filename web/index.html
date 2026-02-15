@@ -71,15 +71,49 @@
         </section>
 
         <section class="card">
-          <h3>Map</h3>
+          <div class="cardhead">
+            <h3>Map</h3>
+            <button id="mapExpandBtn" class="ghost small">Expand</button>
+          </div>
           <div id="map"></div>
         </section>
       </div>
 
-      <section class="card">
-        <h3>Media Library</h3>
-        <div id="mediaGrid" class="media-grid"></div>
-      </section>
+      <div class="browse-layout">
+        <section class="card places">
+          <div class="cardhead">
+            <h3>Places</h3>
+            <button id="clearPlaceBtn" class="ghost small">Clear</button>
+          </div>
+          <div id="placeCrumb" class="crumb"></div>
+          <div class="places-cols">
+            <div>
+              <h4>State</h4>
+              <div id="placesState" class="places-list"></div>
+            </div>
+            <div>
+              <h4>County</h4>
+              <div id="placesCounty" class="places-list"></div>
+            </div>
+            <div>
+              <h4>City</h4>
+              <div id="placesCity" class="places-list"></div>
+            </div>
+            <div>
+              <h4>Street</h4>
+              <div id="placesRoad" class="places-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="cardhead">
+            <h3>Media Library</h3>
+            <div id="activeFilter" class="muted"></div>
+          </div>
+          <div id="mediaGrid" class="media-grid"></div>
+        </section>
+      </div>
 
       <section class="card">
         <h3>Recent Audit Trail</h3>
@@ -87,6 +121,16 @@
       </section>
     </section>
   </main>
+
+  <div class="modal hidden" id="mapModal" aria-hidden="true">
+    <div class="modal-inner card">
+      <div class="cardhead">
+        <h3>Map</h3>
+        <button id="mapCloseBtn" class="ghost small">Close</button>
+      </div>
+      <div id="mapFull" class="map-full"></div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script type="module" src="/web/app.js"></script>
