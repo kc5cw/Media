@@ -38,7 +38,10 @@ const selectionInfo = document.querySelector('#selectionInfo');
 const selectAllBtn = document.querySelector('#selectAllBtn');
 const clearSelectionBtn = document.querySelector('#clearSelectionBtn');
 const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
+const downloadSelectedFilesBtn = document.querySelector('#downloadSelectedFilesBtn');
+const downloadSelectedZipBtn = document.querySelector('#downloadSelectedZipBtn');
 const deleteCurrentBtn = document.querySelector('#deleteCurrentBtn');
+const downloadCurrentBtn = document.querySelector('#downloadCurrentBtn');
 const backupForm = document.querySelector('#backupForm');
 const backupMode = document.querySelector('#backupMode');
 const backupDestination = document.querySelector('#backupDestination');
@@ -46,6 +49,13 @@ const backupSSHPort = document.querySelector('#backupSSHPort');
 const backupAPIMethod = document.querySelector('#backupAPIMethod');
 const backupAPIToken = document.querySelector('#backupAPIToken');
 const backupStatus = document.querySelector('#backupStatus');
+const textFilterInput = document.querySelector('#textFilterInput');
+const kindFilterSelect = document.querySelector('#kindFilterSelect');
+const gpsFilterSelect = document.querySelector('#gpsFilterSelect');
+const captureFromInput = document.querySelector('#captureFromInput');
+const captureToInput = document.querySelector('#captureToInput');
+const applyMediaFilterBtn = document.querySelector('#applyMediaFilterBtn');
+const resetMediaFilterBtn = document.querySelector('#resetMediaFilterBtn');
 
 let map;
 let mapLayer;
@@ -71,6 +81,14 @@ const locFilter = {
   road: ''
 };
 
+const mediaFilter = {
+  q: '',
+  kind: '',
+  gps: '',
+  from: '',
+  to: ''
+};
+
 init().catch((err) => {
   console.error(err);
   statusChip.textContent = `Initialization error: ${err?.message || err}`;
@@ -78,6 +96,7 @@ init().catch((err) => {
 
 async function init() {
   bindEvents();
+  writeMediaFilterControls();
   await refreshAuthState();
 }
 
@@ -141,9 +160,44 @@ function bindEvents() {
     await deleteSelectedMedia(Array.from(selectedIDs));
   });
 
+  downloadSelectedFilesBtn?.addEventListener('click', () => {
+    downloadSelectedAsFiles(Array.from(selectedIDs));
+  });
+
+  downloadSelectedZipBtn?.addEventListener('click', async () => {
+    await downloadSelectedAsZip(Array.from(selectedIDs));
+  });
+
   deleteCurrentBtn?.addEventListener('click', async () => {
     if (!currentPreviewID) return;
     await deleteSelectedMedia([currentPreviewID]);
+  });
+
+  downloadCurrentBtn?.addEventListener('click', () => {
+    if (!currentPreviewID) return;
+    downloadSelectedAsFiles([currentPreviewID]);
+  });
+
+  applyMediaFilterBtn?.addEventListener('click', async () => {
+    readMediaFilterControls();
+    await loadDashboardData();
+  });
+
+  resetMediaFilterBtn?.addEventListener('click', async () => {
+    mediaFilter.q = '';
+    mediaFilter.kind = '';
+    mediaFilter.gps = '';
+    mediaFilter.from = '';
+    mediaFilter.to = '';
+    writeMediaFilterControls();
+    await loadDashboardData();
+  });
+
+  textFilterInput?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    readMediaFilterControls();
+    await loadDashboardData();
   });
 
   backupForm?.addEventListener('submit', async (event) => {
@@ -334,6 +388,12 @@ function renderFilterChip() {
   if (locFilter.county) parts.push(`County: ${locFilter.county}`);
   if (locFilter.city) parts.push(`City: ${locFilter.city}`);
   if (locFilter.road) parts.push(`Street: ${locFilter.road}`);
+  if (mediaFilter.kind) parts.push(`Type: ${mediaFilter.kind}`);
+  if (mediaFilter.gps === 'yes') parts.push('GPS: tagged');
+  if (mediaFilter.gps === 'no') parts.push('GPS: none');
+  if (mediaFilter.from) parts.push(`From: ${isoToDateValue(mediaFilter.from)}`);
+  if (mediaFilter.to) parts.push(`To: ${isoToDateValue(mediaFilter.to)}`);
+  if (mediaFilter.q) parts.push(`Search: "${mediaFilter.q}"`);
   activeFilter.textContent = parts.length ? parts.join(' | ') : 'All media';
 }
 
@@ -425,11 +485,17 @@ function renderMountPolicy() {
 }
 
 function filterQuery(prefix) {
+  readMediaFilterControls();
   const params = new URLSearchParams();
   if (locFilter.state) params.set('state', locFilter.state);
   if (locFilter.county) params.set('county', locFilter.county);
   if (locFilter.city) params.set('city', locFilter.city);
   if (locFilter.road) params.set('road', locFilter.road);
+  if (mediaFilter.kind) params.set('kind', mediaFilter.kind);
+  if (mediaFilter.gps) params.set('gps', mediaFilter.gps);
+  if (mediaFilter.q) params.set('q', mediaFilter.q);
+  if (mediaFilter.from) params.set('from', mediaFilter.from);
+  if (mediaFilter.to) params.set('to', mediaFilter.to);
   const q = params.toString();
   return q ? `${prefix}${q}` : '';
 }
@@ -502,6 +568,7 @@ function renderMedia(items) {
 function renderPreview(item) {
   currentPreviewID = Number(item.id);
   deleteCurrentBtn?.classList.remove('hidden');
+  downloadCurrentBtn?.classList.remove('hidden');
   const safeName = escapeHtml(item.file_name);
   const ts = new Date(item.capture_time).toLocaleString();
 
@@ -524,6 +591,9 @@ function clearPreview() {
   currentPreviewID = null;
   if (deleteCurrentBtn) {
     deleteCurrentBtn.classList.add('hidden');
+  }
+  if (downloadCurrentBtn) {
+    downloadCurrentBtn.classList.add('hidden');
   }
   if (previewPane) {
     previewPane.className = 'preview-empty';
@@ -562,6 +632,120 @@ async function deleteSelectedMedia(ids) {
   } catch (err) {
     statusChip.textContent = `Delete failed: ${err.message}`;
   }
+}
+
+function readMediaFilterControls() {
+  mediaFilter.q = String(textFilterInput?.value || '').trim();
+  mediaFilter.kind = String(kindFilterSelect?.value || '').trim().toLowerCase();
+  mediaFilter.gps = String(gpsFilterSelect?.value || '').trim().toLowerCase();
+  mediaFilter.from = normalizeDateToStartISO(captureFromInput?.value || '');
+  mediaFilter.to = normalizeDateToEndISO(captureToInput?.value || '');
+}
+
+function writeMediaFilterControls() {
+  if (textFilterInput) textFilterInput.value = mediaFilter.q || '';
+  if (kindFilterSelect) kindFilterSelect.value = mediaFilter.kind || '';
+  if (gpsFilterSelect) gpsFilterSelect.value = mediaFilter.gps || '';
+  if (captureFromInput) captureFromInput.value = isoToDateValue(mediaFilter.from);
+  if (captureToInput) captureToInput.value = isoToDateValue(mediaFilter.to);
+}
+
+function normalizeDateToStartISO(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const dt = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toISOString();
+}
+
+function normalizeDateToEndISO(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const dt = new Date(`${value}T23:59:59`);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toISOString();
+}
+
+function isoToDateValue(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  const year = dt.getFullYear();
+  const month = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function downloadSelectedAsFiles(ids) {
+  const normalized = Array.from(new Set((ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  if (!normalized.length) return;
+
+  const itemByID = new Map((mediaItems || []).map((item) => [Number(item.id), item]));
+  let started = 0;
+
+  normalized.forEach((id, idx) => {
+    const item = itemByID.get(id);
+    if (!item || !item.preview_url) return;
+    started++;
+    setTimeout(() => {
+      const sep = String(item.preview_url).includes('?') ? '&' : '?';
+      triggerDownload(`${item.preview_url}${sep}download=1`, item.file_name || `media-${id}`);
+    }, idx * 120);
+  });
+
+  if (started > 0) {
+    statusChip.textContent = started === 1 ? 'Starting 1 file download...' : `Starting ${started} file downloads...`;
+  } else {
+    statusChip.textContent = 'No downloadable files are visible in the current set.';
+  }
+}
+
+async function downloadSelectedAsZip(ids) {
+  const normalized = Array.from(new Set((ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  if (!normalized.length) return;
+
+  try {
+    const response = await fetch('/api/media/download-zip', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: normalized })
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `ZIP download failed (${response.status})`);
+    }
+
+    const blob = await response.blob();
+    const filename = parseFilenameFromContentDisposition(response.headers.get('Content-Disposition')) || `usbvault_export_${Date.now()}.zip`;
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, filename, true);
+    statusChip.textContent = normalized.length === 1 ? 'ZIP download ready for 1 file.' : `ZIP download ready for ${normalized.length} files.`;
+  } catch (err) {
+    statusChip.textContent = `ZIP download failed: ${err.message}`;
+  }
+}
+
+function triggerDownload(href, filename, revokeObjectURL = false) {
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = filename || 'download.bin';
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  if (revokeObjectURL) {
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+  }
+}
+
+function parseFilenameFromContentDisposition(raw) {
+  const value = String(raw || '');
+  const match = value.match(/filename=\"?([^\";]+)\"?/i);
+  if (!match) return '';
+  return match[1].trim();
 }
 
 function renderMap(points) {

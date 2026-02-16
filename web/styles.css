@@ -313,6 +313,23 @@ button.danger {
   justify-content: flex-end;
 }
 
+.media-filter-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(130px, 1fr)) minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.media-filter-row input,
+.media-filter-row select {
+  margin-top: 0;
+  padding: 9px 10px;
+}
+
+.media-filter-row button {
+  align-self: center;
+}
+
 .backup-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -528,6 +545,10 @@ button.danger {
 
   .browse-layout {
     grid-template-columns: 1fr;
+  }
+
+  .media-filter-row {
+    grid-template-columns: 1fr 1fr;
   }
 
   .toolbar {

@@ -100,10 +100,15 @@ type GeocodeCacheEntry struct {
 }
 
 type MediaFilter struct {
-	State  string
-	County string
-	City   string
-	Road   string
+	State       string
+	County      string
+	City        string
+	Road        string
+	Kind        string
+	Query       string
+	CaptureFrom string
+	CaptureTo   string
+	HasGPS      string
 }
 
 type LocationGroup struct {
@@ -994,5 +999,42 @@ func buildLocationWhere(filter MediaFilter) (string, []any) {
 	apply("loc_city", filter.City)
 	apply("loc_road", filter.Road)
 
+	kind := strings.ToLower(strings.TrimSpace(filter.Kind))
+	if kind == "image" || kind == "video" {
+		clauses = append(clauses, "kind = ?")
+		args = append(args, kind)
+	}
+
+	q := strings.ToLower(strings.TrimSpace(filter.Query))
+	if q != "" {
+		q = escapeLikePattern(q)
+		like := "%" + q + "%"
+		clauses = append(clauses, `(LOWER(file_name) LIKE ? ESCAPE '\' OR LOWER(extension) LIKE ? ESCAPE '\' OR LOWER(COALESCE(make,'')) LIKE ? ESCAPE '\' OR LOWER(COALESCE(model,'')) LIKE ? ESCAPE '\' OR LOWER(COALESCE(loc_display_name,'')) LIKE ? ESCAPE '\')`)
+		args = append(args, like, like, like, like, like)
+	}
+
+	if strings.TrimSpace(filter.CaptureFrom) != "" {
+		clauses = append(clauses, "capture_time >= ?")
+		args = append(args, strings.TrimSpace(filter.CaptureFrom))
+	}
+	if strings.TrimSpace(filter.CaptureTo) != "" {
+		clauses = append(clauses, "capture_time <= ?")
+		args = append(args, strings.TrimSpace(filter.CaptureTo))
+	}
+
+	switch strings.ToLower(strings.TrimSpace(filter.HasGPS)) {
+	case "yes":
+		clauses = append(clauses, "gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
+	case "no":
+		clauses = append(clauses, "(gps_lat IS NULL OR gps_lon IS NULL)")
+	}
+
 	return strings.Join(clauses, " AND "), args
+}
+
+func escapeLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
 }

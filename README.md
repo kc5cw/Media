@@ -13,6 +13,8 @@ It detects removable drives, scans for image/video media, extracts metadata (EXI
 - Local auth (username/password) and session cookies.
 - Tamper-evident audit log chain for key system events.
 - Local web GUI for album browsing, sorting, map markers, and preview playback.
+- Advanced media filters (location + type + GPS + date range + text search).
+- Download options for single/multi-select: parallel file downloads or ZIP bundle.
 - Multi-select delete workflow with confirmation and DB/file cleanup.
 - Streaming backup export to `ssh`, `rsync`, `s3`, or generic `api` endpoints.
 - Storage layout that matches the UI location tree (state/county/city/street/date).
@@ -125,6 +127,15 @@ From **Media Library**:
 - Click item checkboxes to deselect specific files.
 - `Delete Selected` (or `Delete Current` in Preview Player).
 - Confirm deletion; USB Vault removes files from disk and DB rows.
+
+## Filter + Download (GUI)
+
+From **Media Library**:
+
+- Filter by location, type (`image`/`video`), GPS presence, capture date range, and text search.
+- Use `Download Files` for per-file browser downloads (parallel TCP sessions, browser-limited).
+- Use `Download ZIP` to export selected files in one archive stream.
+- In **Preview Player**, use `Download Current` for a single item.
 
 ## Backup Export (GUI)
 

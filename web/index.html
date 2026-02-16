@@ -89,7 +89,10 @@
         <section class="card viewer">
           <div class="cardhead">
             <h3>Preview Player</h3>
-            <button id="deleteCurrentBtn" class="danger small hidden">Delete Current</button>
+            <div class="actions">
+              <button id="downloadCurrentBtn" class="ghost small hidden">Download Current</button>
+              <button id="deleteCurrentBtn" class="danger small hidden">Delete Current</button>
+            </div>
           </div>
           <div id="previewPane" class="preview-empty">Select a file from the album.</div>
         </section>
@@ -135,10 +138,29 @@
             <h3>Media Library</h3>
             <div class="media-tools">
               <div id="selectionInfo" class="muted">0 selected</div>
+              <button id="downloadSelectedFilesBtn" class="ghost small">Download Files</button>
+              <button id="downloadSelectedZipBtn" class="ghost small">Download ZIP</button>
               <button id="selectAllBtn" class="ghost small">Select All Shown</button>
               <button id="clearSelectionBtn" class="ghost small">Clear</button>
               <button id="deleteSelectedBtn" class="danger small">Delete Selected</button>
             </div>
+          </div>
+          <div class="media-filter-row">
+            <input id="textFilterInput" type="text" placeholder="Search filename, location, camera..." />
+            <select id="kindFilterSelect">
+              <option value="">All types</option>
+              <option value="image">Images</option>
+              <option value="video">Videos</option>
+            </select>
+            <select id="gpsFilterSelect">
+              <option value="">GPS: any</option>
+              <option value="yes">GPS: tagged</option>
+              <option value="no">GPS: none</option>
+            </select>
+            <input id="captureFromInput" type="date" title="Capture date from" />
+            <input id="captureToInput" type="date" title="Capture date to" />
+            <button id="applyMediaFilterBtn" class="ghost small">Apply</button>
+            <button id="resetMediaFilterBtn" class="ghost small">Reset</button>
           </div>
           <div id="activeFilter" class="muted"></div>
           <div id="mediaGrid" class="media-grid"></div>
