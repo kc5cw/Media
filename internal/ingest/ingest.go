@@ -155,7 +155,18 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		return result, fmt.Errorf("ensure base storage: %w", err)
 	}
 
-	if config.PathKey(baseStorage) == config.PathKey(mountPath) {
+	excludedRaw, _, err := m.store.GetSetting(ctx, config.ExcludedMountsSettingKey)
+	if err != nil {
+		return result, err
+	}
+	excludedMounts := config.ParsePathList(excludedRaw)
+
+	if shouldSkipMount(mountPath, baseStorage, excludedMounts) {
+		_ = m.audit.Log(ctx, actor, "ingest_skipped_excluded_mount", map[string]any{
+			"mount":           mountPath,
+			"base_storage":    baseStorage,
+			"excluded_mounts": excludedMounts,
+		})
 		return result, nil
 	}
 
@@ -297,6 +308,21 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		LastResult: result,
 	})
 	return result, nil
+}
+
+func shouldSkipMount(mountPath, baseStorage string, excludedMounts []string) bool {
+	// Never ingest from the destination storage drive/mount itself.
+	if config.IsPathWithin(baseStorage, mountPath) || config.IsPathWithin(mountPath, baseStorage) {
+		return true
+	}
+
+	// User-managed exclusions.
+	for _, excluded := range excludedMounts {
+		if config.IsPathWithin(mountPath, excluded) || config.IsPathWithin(excluded, mountPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) setStatus(st Status) {

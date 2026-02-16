@@ -170,6 +170,8 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
 	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
 	mux.HandleFunc("GET /api/audit", a.withAuth(a.handleAudit))
+	mux.HandleFunc("GET /api/mount-policy", a.withAuth(a.handleMountPolicyGet))
+	mux.HandleFunc("POST /api/excluded-mounts", a.withAuth(a.handleExcludedMountsSet))
 	mux.HandleFunc("POST /api/storage", a.withAuth(a.handleSetStorage))
 	mux.HandleFunc("POST /api/rescan", a.withAuth(a.handleRescan))
 	mux.HandleFunc("GET /api/cloud-sync", a.withAuth(a.handleCloudSyncGet))
@@ -468,6 +470,66 @@ func (a *App) handleAudit(w http.ResponseWriter, r *http.Request, authCtx *AuthC
 	writeJSON(w, http.StatusOK, map[string]any{"items": records, "viewer": authCtx.Username})
 }
 
+func (a *App) handleMountPolicyGet(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	ctx := r.Context()
+
+	excluded, err := a.getExcludedMounts(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database unavailable"})
+		return
+	}
+
+	baseStorage, hasStorage, err := a.store.GetSetting(ctx, baseStorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database unavailable"})
+		return
+	}
+	if hasStorage {
+		baseStorage = filepath.Clean(baseStorage)
+	}
+
+	mounts := a.watcher.CurrentMounts()
+	autoExcluded := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		if hasStorage && config.IsPathWithin(baseStorage, mount) {
+			autoExcluded = append(autoExcluded, mount)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mounts":               mounts,
+		"excluded_mounts":      excluded,
+		"auto_excluded_mounts": autoExcluded,
+		"storage_dir":          baseStorage,
+	})
+}
+
+type excludedMountsRequest struct {
+	Mounts []string `json:"mounts"`
+}
+
+func (a *App) handleExcludedMountsSet(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	var req excludedMountsRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	normalized := config.NormalizeAbsolutePaths(req.Mounts)
+	if len(normalized) > 256 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many excluded mounts"})
+		return
+	}
+
+	if err := a.store.SetSetting(r.Context(), config.ExcludedMountsSettingKey, config.EncodePathList(normalized)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update excluded mounts"})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "excluded_mounts_updated", map[string]any{"count": len(normalized)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "excluded_mounts": normalized})
+}
+
 type storageRequest struct {
 	BaseStorageDir string `json:"base_storage_dir"`
 }
@@ -738,4 +800,12 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+func (a *App) getExcludedMounts(ctx context.Context) ([]string, error) {
+	raw, _, err := a.store.GetSetting(ctx, config.ExcludedMountsSettingKey)
+	if err != nil {
+		return nil, err
+	}
+	return config.ParsePathList(raw), nil
 }

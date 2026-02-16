@@ -236,6 +236,55 @@ button.small {
   align-items: center;
 }
 
+.mount-policy-list {
+  display: grid;
+  gap: 10px;
+}
+
+.mount-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(145, 176, 220, 0.2);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(7, 11, 20, 0.7);
+}
+
+.mount-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86rem;
+}
+
+.mount-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pill {
+  border-radius: 999px;
+  border: 1px solid rgba(145, 176, 220, 0.3);
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.auto {
+  color: #9ff2c2;
+  border-color: rgba(63, 246, 184, 0.45);
+}
+
+.pill.user {
+  color: #ffd9a8;
+  border-color: rgba(255, 203, 132, 0.45);
+}
+
 .actions {
   display: flex;
   gap: 10px;

@@ -31,6 +31,9 @@ const setupForm = document.querySelector('#setupForm');
 const loginForm = document.querySelector('#loginForm');
 const refreshBtn = document.querySelector('#refreshBtn');
 const logoutBtn = document.querySelector('#logoutBtn');
+const reloadMountPolicyBtn = document.querySelector('#reloadMountPolicyBtn');
+const mountPolicyList = document.querySelector('#mountPolicyList');
+const mountPolicyMsg = document.querySelector('#mountPolicyMsg');
 
 let map;
 let mapLayer;
@@ -38,6 +41,7 @@ let mapFull;
 let mapFullLayer;
 let lastPoints = [];
 let ingestPoller;
+let mountPolicy = { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
 
 function leaflet() {
   // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
@@ -89,6 +93,10 @@ function bindEvents() {
 
   refreshBtn?.addEventListener('click', async () => {
     await loadDashboardData();
+  });
+
+  reloadMountPolicyBtn?.addEventListener('click', async () => {
+    await loadMountPolicy();
   });
 
   logoutBtn?.addEventListener('click', async () => {
@@ -149,7 +157,12 @@ async function refreshAuthState() {
 }
 
 async function loadDashboardData() {
-  await loadPlaces();
+  await Promise.all([
+    loadPlaces(),
+    loadMountPolicy().catch((err) => {
+      if (mountPolicyMsg) mountPolicyMsg.textContent = `Mount policy unavailable: ${err.message}`;
+    })
+  ]);
   const [mediaRes, mapRes, auditRes] = await Promise.all([
     api(`/api/media?size=180&sort=capture_time&order=desc${filterQuery('&')}`),
     api(`/api/map${filterQuery('?')}`),
@@ -241,6 +254,93 @@ function renderFilterChip() {
   if (locFilter.city) parts.push(`City: ${locFilter.city}`);
   if (locFilter.road) parts.push(`Street: ${locFilter.road}`);
   activeFilter.textContent = parts.length ? parts.join(' | ') : 'All media';
+}
+
+async function loadMountPolicy() {
+  if (!mountPolicyList) return;
+  mountPolicyMsg.textContent = 'Loading mount sources...';
+  const payload = await api('/api/mount-policy');
+  mountPolicy = payload || { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
+  renderMountPolicy();
+}
+
+function renderMountPolicy() {
+  if (!mountPolicyList) return;
+  mountPolicyList.innerHTML = '';
+
+  const mounts = mountPolicy.mounts || [];
+  const excluded = new Set(mountPolicy.excluded_mounts || []);
+  const autoExcluded = new Set(mountPolicy.auto_excluded_mounts || []);
+
+  if (!mounts.length) {
+    mountPolicyMsg.textContent = 'No removable mounts detected.';
+    mountPolicyList.innerHTML = '<div class="muted">Plug in a USB/SD device to see it here.</div>';
+    return;
+  }
+
+  mountPolicyMsg.textContent = '';
+
+  mounts.forEach((mount) => {
+    const row = document.createElement('div');
+    row.className = 'mount-row';
+
+    const path = document.createElement('div');
+    path.className = 'mount-path';
+    path.textContent = mount;
+    path.title = mount;
+
+    const actions = document.createElement('div');
+    actions.className = 'mount-actions';
+
+    if (autoExcluded.has(mount)) {
+      const pill = document.createElement('div');
+      pill.className = 'pill auto';
+      pill.textContent = 'Auto ignored (storage drive)';
+      actions.appendChild(pill);
+    } else if (excluded.has(mount)) {
+      const pill = document.createElement('div');
+      pill.className = 'pill user';
+      pill.textContent = 'Excluded';
+      actions.appendChild(pill);
+    } else {
+      const pill = document.createElement('div');
+      pill.className = 'pill';
+      pill.textContent = 'Included';
+      actions.appendChild(pill);
+    }
+
+    if (!autoExcluded.has(mount)) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost small';
+      btn.textContent = excluded.has(mount) ? 'Include' : 'Exclude';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const updated = new Set(mountPolicy.excluded_mounts || []);
+          if (updated.has(mount)) {
+            updated.delete(mount);
+          } else {
+            updated.add(mount);
+          }
+          await api('/api/excluded-mounts', {
+            method: 'POST',
+            body: { mounts: Array.from(updated) }
+          });
+          await loadMountPolicy();
+          mountPolicyMsg.textContent = 'Excluded mount list updated.';
+        } catch (err) {
+          mountPolicyMsg.textContent = `Failed to update exclusions: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      actions.appendChild(btn);
+    }
+
+    row.appendChild(path);
+    row.appendChild(actions);
+    mountPolicyList.appendChild(row);
+  });
 }
 
 function filterQuery(prefix) {

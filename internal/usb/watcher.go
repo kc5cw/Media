@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,6 +94,20 @@ func (w *Watcher) discoverMounts() []string {
 		}
 	}
 	return mounts
+}
+
+func (w *Watcher) CurrentMounts() []string {
+	mounts := w.discoverMounts()
+	seen := make(map[string]string, len(mounts))
+	for _, mount := range mounts {
+		seen[config.PathKey(mount)] = mount
+	}
+	out := make([]string, 0, len(seen))
+	for _, mount := range seen {
+		out = append(out, mount)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func discoverWindowsDrives(letters []string) []string {
