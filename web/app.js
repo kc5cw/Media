@@ -113,6 +113,11 @@ function bindEvents() {
   mapModal?.addEventListener('click', (e) => {
     if (e.target === mapModal) closeMapModal();
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && mapModal && !mapModal.classList.contains('hidden')) {
+      closeMapModal();
+    }
+  });
 }
 
 async function refreshAuthState() {

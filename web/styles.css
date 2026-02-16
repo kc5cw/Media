@@ -344,6 +344,10 @@ button.small {
   padding: 18px;
 }
 
+.modal.hidden {
+  display: none;
+}
+
 .modal-inner {
   width: min(1100px, 100%);
 }
