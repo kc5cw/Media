@@ -441,7 +441,9 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 		return nil
 	}
 
-	crcHex, shaHex, err := media.ComputeHashes(srcPath)
+	crcHex, shaHex, err := media.ComputeHashesWithProgress(srcPath, func(n int64) {
+		m.recordRateSample(n)
+	})
 	if err != nil {
 		return err
 	}
