@@ -56,6 +56,20 @@ const captureFromInput = document.querySelector('#captureFromInput');
 const captureToInput = document.querySelector('#captureToInput');
 const applyMediaFilterBtn = document.querySelector('#applyMediaFilterBtn');
 const resetMediaFilterBtn = document.querySelector('#resetMediaFilterBtn');
+const sortBySelect = document.querySelector('#sortBySelect');
+const sortOrderSelect = document.querySelector('#sortOrderSelect');
+const nearLatInput = document.querySelector('#nearLatInput');
+const nearLonInput = document.querySelector('#nearLonInput');
+const viewAllMediaBtn = document.querySelector('#viewAllMediaBtn');
+const viewAlbumsBtn = document.querySelector('#viewAlbumsBtn');
+const albumActions = document.querySelector('#albumActions');
+const albumViewPanel = document.querySelector('#albumViewPanel');
+const albumList = document.querySelector('#albumList');
+const autoAlbumStateList = document.querySelector('#autoAlbumStateList');
+const newAlbumNameInput = document.querySelector('#newAlbumNameInput');
+const createAlbumBtn = document.querySelector('#createAlbumBtn');
+const addSelectedToAlbumBtn = document.querySelector('#addSelectedToAlbumBtn');
+const removeSelectedFromAlbumBtn = document.querySelector('#removeSelectedFromAlbumBtn');
 
 let map;
 let mapLayer;
@@ -67,6 +81,9 @@ let mountPolicy = { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
 let mediaItems = [];
 let selectedIDs = new Set();
 let currentPreviewID = null;
+let viewMode = 'all';
+let albums = [];
+let activeAlbumID = 0;
 
 function leaflet() {
   // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
@@ -86,7 +103,11 @@ const mediaFilter = {
   kind: '',
   gps: '',
   from: '',
-  to: ''
+  to: '',
+  sort: 'capture_time',
+  order: 'desc',
+  nearLat: '',
+  nearLon: ''
 };
 
 init().catch((err) => {
@@ -180,6 +201,10 @@ function bindEvents() {
 
   applyMediaFilterBtn?.addEventListener('click', async () => {
     readMediaFilterControls();
+    if (mediaFilter.sort === 'distance' && (!mediaFilter.nearLat || !mediaFilter.nearLon)) {
+      statusChip.textContent = 'For region proximity sort, provide both Near lat and Near lon.';
+      return;
+    }
     await loadDashboardData();
   });
 
@@ -189,6 +214,10 @@ function bindEvents() {
     mediaFilter.gps = '';
     mediaFilter.from = '';
     mediaFilter.to = '';
+    mediaFilter.sort = 'capture_time';
+    mediaFilter.order = 'desc';
+    mediaFilter.nearLat = '';
+    mediaFilter.nearLon = '';
     writeMediaFilterControls();
     await loadDashboardData();
   });
@@ -198,6 +227,79 @@ function bindEvents() {
     event.preventDefault();
     readMediaFilterControls();
     await loadDashboardData();
+  });
+
+  viewAllMediaBtn?.addEventListener('click', async () => {
+    viewMode = 'all';
+    activeAlbumID = 0;
+    selectedIDs.clear();
+    renderViewModeState();
+    await loadDashboardData();
+  });
+
+  viewAlbumsBtn?.addEventListener('click', async () => {
+    viewMode = 'albums';
+    selectedIDs.clear();
+    renderViewModeState();
+    await loadAlbums();
+    await loadDashboardData();
+  });
+
+  createAlbumBtn?.addEventListener('click', async () => {
+    const name = String(newAlbumNameInput?.value || '').trim();
+    if (!name) {
+      statusChip.textContent = 'Album name is required.';
+      return;
+    }
+    try {
+      const payload = await api('/api/albums', { method: 'POST', body: { name } });
+      newAlbumNameInput.value = '';
+      await loadAlbums();
+      if (payload?.item?.id) {
+        activeAlbumID = Number(payload.item.id);
+      }
+      renderViewModeState();
+      await loadDashboardData();
+    } catch (err) {
+      statusChip.textContent = `Create album failed: ${err.message}`;
+    }
+  });
+
+  addSelectedToAlbumBtn?.addEventListener('click', async () => {
+    if (!activeAlbumID) {
+      statusChip.textContent = 'Select an album first.';
+      return;
+    }
+    const ids = Array.from(selectedIDs);
+    if (!ids.length) return;
+    try {
+      const res = await api(`/api/albums/${activeAlbumID}/add`, { method: 'POST', body: { ids } });
+      await loadAlbums();
+      statusChip.textContent = `Album updated: added ${res.added || 0}, skipped ${res.skipped || 0}`;
+      if (viewMode === 'albums') {
+        await loadDashboardData();
+      }
+    } catch (err) {
+      statusChip.textContent = `Add to album failed: ${err.message}`;
+    }
+  });
+
+  removeSelectedFromAlbumBtn?.addEventListener('click', async () => {
+    if (!activeAlbumID) {
+      statusChip.textContent = 'Select an album first.';
+      return;
+    }
+    const ids = Array.from(selectedIDs);
+    if (!ids.length) return;
+    try {
+      const res = await api(`/api/albums/${activeAlbumID}/remove`, { method: 'POST', body: { ids } });
+      selectedIDs.clear();
+      await loadAlbums();
+      statusChip.textContent = `Album updated: removed ${res.removed || 0}, skipped ${res.skipped || 0}`;
+      await loadDashboardData();
+    } catch (err) {
+      statusChip.textContent = `Remove from album failed: ${err.message}`;
+    }
   });
 
   backupForm?.addEventListener('submit', async (event) => {
@@ -270,6 +372,9 @@ async function refreshAuthState() {
     statusChip.textContent = 'Setup required';
     setupCard.classList.remove('hidden');
     stopIngestPolling();
+    viewMode = 'all';
+    activeAlbumID = 0;
+    albums = [];
     selectedIDs.clear();
     clearPreview();
     return;
@@ -279,6 +384,9 @@ async function refreshAuthState() {
     statusChip.textContent = 'Login required';
     loginCard.classList.remove('hidden');
     stopIngestPolling();
+    viewMode = 'all';
+    activeAlbumID = 0;
+    albums = [];
     selectedIDs.clear();
     clearPreview();
     return;
@@ -287,20 +395,33 @@ async function refreshAuthState() {
   statusChip.textContent = 'Authenticated';
   storageLabel.textContent = `Storage: ${status.storage_dir || 'Not configured'}`;
   dashboard.classList.remove('hidden');
+  renderViewModeState();
   startIngestPolling();
+  await loadAlbums();
   await loadDashboardData();
 }
 
 async function loadDashboardData() {
+  renderViewModeState();
   await Promise.all([
     loadPlaces(),
     loadMountPolicy().catch((err) => {
       if (mountPolicyMsg) mountPolicyMsg.textContent = `Mount policy unavailable: ${err.message}`;
     })
   ]);
+  if (viewMode === 'albums') {
+    await loadAlbums();
+    await loadAutoAlbumStates();
+  }
+
+  const mediaSort = mediaFilter.sort || 'capture_time';
+  const mediaOrder = mediaFilter.order || 'desc';
+  const showAlbumMedia = !(viewMode === 'albums' && activeAlbumID === 0);
   const [mediaRes, mapRes, auditRes] = await Promise.all([
-    api(`/api/media?size=180&sort=capture_time&order=desc${filterQuery('&')}`),
-    api(`/api/map${filterQuery('?')}`),
+    showAlbumMedia
+      ? api(`/api/media?size=180&sort=${encodeURIComponent(mediaSort)}&order=${encodeURIComponent(mediaOrder)}${filterQuery('&')}`)
+      : Promise.resolve({ items: [] }),
+    showAlbumMedia ? api(`/api/map${filterQuery('?')}`) : Promise.resolve({ points: [] }),
     api('/api/audit')
   ]);
 
@@ -394,6 +515,18 @@ function renderFilterChip() {
   if (mediaFilter.from) parts.push(`From: ${isoToDateValue(mediaFilter.from)}`);
   if (mediaFilter.to) parts.push(`To: ${isoToDateValue(mediaFilter.to)}`);
   if (mediaFilter.q) parts.push(`Search: "${mediaFilter.q}"`);
+  if (mediaFilter.sort) parts.push(`Sort: ${mediaFilter.sort} (${mediaFilter.order || 'desc'})`);
+  if (mediaFilter.sort === 'distance' && mediaFilter.nearLat && mediaFilter.nearLon) {
+    parts.push(`Near: ${mediaFilter.nearLat}, ${mediaFilter.nearLon}`);
+  }
+  if (viewMode === 'albums') {
+    if (activeAlbumID > 0) {
+      const album = albums.find((a) => Number(a.id) === Number(activeAlbumID));
+      parts.push(`Album: ${album?.name || activeAlbumID}`);
+    } else {
+      parts.push('Album View');
+    }
+  }
   activeFilter.textContent = parts.length ? parts.join(' | ') : 'All media';
 }
 
@@ -484,6 +617,93 @@ function renderMountPolicy() {
   });
 }
 
+async function loadAlbums() {
+  if (!albumList) return;
+  try {
+    const payload = await api('/api/albums');
+    albums = payload.items || [];
+    if (activeAlbumID > 0 && !albums.find((a) => Number(a.id) === Number(activeAlbumID))) {
+      activeAlbumID = 0;
+    }
+    renderAlbums();
+  } catch (err) {
+    albumList.innerHTML = `<div class="muted">Album list unavailable: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderAlbums() {
+  if (!albumList) return;
+  albumList.innerHTML = '';
+  if (!albums.length) {
+    albumList.innerHTML = '<div class="muted">No albums yet. Create one above.</div>';
+    return;
+  }
+  albums.forEach((album) => {
+    const row = document.createElement('div');
+    row.className = 'album-item';
+    if (Number(activeAlbumID) === Number(album.id)) {
+      row.classList.add('active');
+    }
+    row.innerHTML = `<div class="name">${escapeHtml(album.name)}</div><div class="count">${Number(album.item_count || 0)}</div>`;
+    row.addEventListener('click', async () => {
+      activeAlbumID = Number(album.id);
+      selectedIDs.clear();
+      renderAlbums();
+      renderViewModeState();
+      await loadDashboardData();
+    });
+    albumList.appendChild(row);
+  });
+}
+
+async function loadAutoAlbumStates() {
+  if (!autoAlbumStateList) return;
+  try {
+    const stateRes = await api('/api/location-groups?level=state');
+    renderAutoAlbumStates(stateRes.groups || []);
+  } catch (err) {
+    autoAlbumStateList.innerHTML = `<div class="muted">Auto folders unavailable: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderAutoAlbumStates(groups) {
+  if (!autoAlbumStateList) return;
+  autoAlbumStateList.innerHTML = '';
+  const slice = (groups || []).slice(0, 100);
+  if (!slice.length) {
+    autoAlbumStateList.innerHTML = '<div class="muted">No EXIF location folders yet.</div>';
+    return;
+  }
+  slice.forEach((g) => {
+    const row = document.createElement('div');
+    row.className = 'album-item';
+    const selected = String(locFilter.state || '').toLowerCase() === String(g.name || '').toLowerCase();
+    if (selected) row.classList.add('active');
+    row.innerHTML = `<div class="name">${escapeHtml(g.name || 'Unknown')}</div><div class="count">${Number(g.count || 0)}</div>`;
+    row.addEventListener('click', async () => {
+      locFilter.state = g.name || '';
+      locFilter.county = '';
+      locFilter.city = '';
+      locFilter.road = '';
+      activeAlbumID = 0;
+      viewMode = 'all';
+      selectedIDs.clear();
+      renderViewModeState();
+      await loadDashboardData();
+    });
+    autoAlbumStateList.appendChild(row);
+  });
+}
+
+function renderViewModeState() {
+  const albumsMode = viewMode === 'albums';
+  viewAllMediaBtn?.classList.toggle('active', !albumsMode);
+  viewAlbumsBtn?.classList.toggle('active', albumsMode);
+  albumActions?.classList.toggle('hidden', !albumsMode);
+  albumViewPanel?.classList.toggle('hidden', !albumsMode);
+  removeSelectedFromAlbumBtn?.classList.toggle('hidden', !(albumsMode && activeAlbumID > 0));
+}
+
 function filterQuery(prefix) {
   readMediaFilterControls();
   const params = new URLSearchParams();
@@ -491,11 +711,14 @@ function filterQuery(prefix) {
   if (locFilter.county) params.set('county', locFilter.county);
   if (locFilter.city) params.set('city', locFilter.city);
   if (locFilter.road) params.set('road', locFilter.road);
+  if (viewMode === 'albums' && activeAlbumID > 0) params.set('album_id', String(activeAlbumID));
   if (mediaFilter.kind) params.set('kind', mediaFilter.kind);
   if (mediaFilter.gps) params.set('gps', mediaFilter.gps);
   if (mediaFilter.q) params.set('q', mediaFilter.q);
   if (mediaFilter.from) params.set('from', mediaFilter.from);
   if (mediaFilter.to) params.set('to', mediaFilter.to);
+  if (mediaFilter.nearLat) params.set('near_lat', mediaFilter.nearLat);
+  if (mediaFilter.nearLon) params.set('near_lon', mediaFilter.nearLon);
   const q = params.toString();
   return q ? `${prefix}${q}` : '';
 }
@@ -511,7 +734,11 @@ function renderMedia(items) {
     if (currentPreviewID && !visibleIDs.has(Number(currentPreviewID))) {
       clearPreview();
     }
-    mediaGrid.innerHTML = '<p>No media found for this filter.</p>';
+    if (viewMode === 'albums' && activeAlbumID === 0) {
+      mediaGrid.innerHTML = '<p>Select an album to view its media.</p>';
+    } else {
+      mediaGrid.innerHTML = '<p>No media found for this filter.</p>';
+    }
     return;
   }
 
@@ -640,6 +867,10 @@ function readMediaFilterControls() {
   mediaFilter.gps = String(gpsFilterSelect?.value || '').trim().toLowerCase();
   mediaFilter.from = normalizeDateToStartISO(captureFromInput?.value || '');
   mediaFilter.to = normalizeDateToEndISO(captureToInput?.value || '');
+  mediaFilter.sort = String(sortBySelect?.value || 'capture_time').trim();
+  mediaFilter.order = String(sortOrderSelect?.value || 'desc').trim().toLowerCase();
+  mediaFilter.nearLat = String(nearLatInput?.value || '').trim();
+  mediaFilter.nearLon = String(nearLonInput?.value || '').trim();
 }
 
 function writeMediaFilterControls() {
@@ -648,6 +879,10 @@ function writeMediaFilterControls() {
   if (gpsFilterSelect) gpsFilterSelect.value = mediaFilter.gps || '';
   if (captureFromInput) captureFromInput.value = isoToDateValue(mediaFilter.from);
   if (captureToInput) captureToInput.value = isoToDateValue(mediaFilter.to);
+  if (sortBySelect) sortBySelect.value = mediaFilter.sort || 'capture_time';
+  if (sortOrderSelect) sortOrderSelect.value = mediaFilter.order || 'desc';
+  if (nearLatInput) nearLatInput.value = mediaFilter.nearLat || '';
+  if (nearLonInput) nearLonInput.value = mediaFilter.nearLon || '';
 }
 
 function normalizeDateToStartISO(raw) {

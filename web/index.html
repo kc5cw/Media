@@ -145,6 +145,30 @@
               <button id="deleteSelectedBtn" class="danger small">Delete Selected</button>
             </div>
           </div>
+          <div class="library-mode-row">
+            <div class="mode-buttons">
+              <button id="viewAllMediaBtn" class="ghost small active">All Media</button>
+              <button id="viewAlbumsBtn" class="ghost small">Albums</button>
+            </div>
+            <div id="albumActions" class="album-actions hidden">
+              <input id="newAlbumNameInput" type="text" placeholder="New album name" />
+              <button id="createAlbumBtn" class="ghost small">Create Album</button>
+              <button id="addSelectedToAlbumBtn" class="ghost small">Add Selected</button>
+              <button id="removeSelectedFromAlbumBtn" class="ghost small">Remove Selected</button>
+            </div>
+          </div>
+          <div id="albumViewPanel" class="album-view hidden">
+            <div class="album-columns">
+              <div>
+                <h4>User Albums</h4>
+                <div id="albumList" class="album-list"></div>
+              </div>
+              <div>
+                <h4>Auto Folders (EXIF Location)</h4>
+                <div id="autoAlbumStateList" class="album-list"></div>
+              </div>
+            </div>
+          </div>
           <div class="media-filter-row">
             <input id="textFilterInput" type="text" placeholder="Search filename, location, camera..." />
             <select id="kindFilterSelect">
@@ -157,6 +181,31 @@
               <option value="yes">GPS: tagged</option>
               <option value="no">GPS: none</option>
             </select>
+            <select id="sortBySelect">
+              <option value="capture_time">Sort: capture time</option>
+              <option value="ingested_at">Sort: ingested time</option>
+              <option value="file_name">Sort: filename</option>
+              <option value="size_bytes">Sort: file size</option>
+              <option value="kind">Sort: media type</option>
+              <option value="make">Sort: camera make</option>
+              <option value="model">Sort: camera model</option>
+              <option value="camera_pitch">Sort: gimbal pitch</option>
+              <option value="camera_yaw">Sort: gimbal yaw</option>
+              <option value="camera_roll">Sort: gimbal roll</option>
+              <option value="state">Sort: state</option>
+              <option value="county">Sort: county</option>
+              <option value="city">Sort: city</option>
+              <option value="road">Sort: street</option>
+              <option value="gps_lat">Sort: GPS lat</option>
+              <option value="gps_lon">Sort: GPS lon</option>
+              <option value="distance">Sort: region proximity</option>
+            </select>
+            <select id="sortOrderSelect">
+              <option value="desc">Order: desc</option>
+              <option value="asc">Order: asc</option>
+            </select>
+            <input id="nearLatInput" type="number" step="any" min="-90" max="90" placeholder="Near lat (for proximity sort)" />
+            <input id="nearLonInput" type="number" step="any" min="-180" max="180" placeholder="Near lon (for proximity sort)" />
             <input id="captureFromInput" type="date" title="Capture date from" />
             <input id="captureToInput" type="date" title="Capture date to" />
             <button id="applyMediaFilterBtn" class="ghost small">Apply</button>

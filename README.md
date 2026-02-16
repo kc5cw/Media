@@ -15,6 +15,9 @@ It detects removable drives, scans for image/video media, extracts metadata (EXI
 - Local web GUI for album browsing, sorting, map markers, and preview playback.
 - Advanced media filters (location + type + GPS + date range + text search).
 - Download options for single/multi-select: parallel file downloads or ZIP bundle.
+- User Albums with add/remove selected media while preserving the All Media library.
+- Auto album folders from EXIF/geocoded location metadata in Album view.
+- Extended sorting for EXIF/DJI fields (gimbal yaw/pitch/roll, camera make/model, GPS, proximity).
 - Multi-select delete workflow with confirmation and DB/file cleanup.
 - Streaming backup export to `ssh`, `rsync`, `s3`, or generic `api` endpoints.
 - Storage layout that matches the UI location tree (state/county/city/street/date).
@@ -136,6 +139,21 @@ From **Media Library**:
 - Use `Download Files` for per-file browser downloads (parallel TCP sessions, browser-limited).
 - Use `Download ZIP` to export selected files in one archive stream.
 - In **Preview Player**, use `Download Current` for a single item.
+
+## Albums + Advanced Sorting (GUI)
+
+- `All Media` keeps the full library view.
+- `Albums` view lets you:
+  - create albums,
+  - select an album,
+  - add/remove selected media.
+- `Auto Folders (EXIF Location)` appear in album mode for location-based grouping.
+- Sort options include:
+  - capture/ingested time,
+  - file metadata (name, size, kind, extension),
+  - camera fields (make/model, gimbal yaw/pitch/roll),
+  - location fields (state/county/city/street, lat/lon),
+  - `region proximity` using `near_lat` + `near_lon`.
 
 ## Backup Export (GUI)
 

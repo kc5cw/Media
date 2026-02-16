@@ -315,7 +315,7 @@ button.danger {
 
 .media-filter-row {
   display: grid;
-  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(130px, 1fr)) minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
+  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(130px, 1fr)) minmax(170px, 1fr) minmax(120px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -328,6 +328,97 @@ button.danger {
 
 .media-filter-row button {
   align-self: center;
+}
+
+.library-mode-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.mode-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+button.active {
+  border-color: rgba(61, 208, 255, 0.75);
+  box-shadow: 0 0 0 1px rgba(61, 208, 255, 0.35) inset;
+}
+
+.album-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.album-actions input {
+  width: min(320px, 100%);
+  margin-top: 0;
+}
+
+.album-view {
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(145, 176, 220, 0.2);
+  background: rgba(7, 11, 20, 0.55);
+}
+
+.album-columns {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+}
+
+.album-columns h4 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.album-list {
+  display: grid;
+  gap: 8px;
+  max-height: 200px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.album-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(145, 176, 220, 0.2);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(7, 11, 20, 0.7);
+  cursor: pointer;
+}
+
+.album-item:hover {
+  border-color: rgba(61, 208, 255, 0.65);
+}
+
+.album-item.active {
+  border-color: rgba(63, 246, 184, 0.75);
+  box-shadow: 0 0 0 1px rgba(63, 246, 184, 0.3) inset;
+}
+
+.album-item .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-item .count {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .backup-form {
@@ -549,6 +640,10 @@ button.danger {
 
   .media-filter-row {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .album-columns {
+    grid-template-columns: 1fr;
   }
 
   .toolbar {

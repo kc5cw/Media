@@ -109,6 +109,18 @@ type MediaFilter struct {
 	CaptureFrom string
 	CaptureTo   string
 	HasGPS      string
+	AlbumID     int64
+	NearLat     float64
+	NearLon     float64
+	HasNear     bool
+}
+
+type Album struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	ItemCount int64  `json:"item_count"`
 }
 
 type LocationGroup struct {
@@ -211,9 +223,24 @@ func (s *Store) migrate(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_media_capture_time ON media_files(capture_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_media_gps ON media_files(gps_lat, gps_lon);`,
+		`CREATE TABLE IF NOT EXISTS albums (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL UNIQUE,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);`,
+		`CREATE TABLE IF NOT EXISTS album_items (
+				album_id INTEGER NOT NULL,
+				media_id INTEGER NOT NULL,
+				added_at TEXT NOT NULL,
+				PRIMARY KEY (album_id, media_id),
+				FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
+				FOREIGN KEY (media_id) REFERENCES media_files(id) ON DELETE CASCADE
+			);`,
+		`CREATE INDEX IF NOT EXISTS idx_album_items_media_id ON album_items(media_id);`,
 		`CREATE TABLE IF NOT EXISTS audit_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts TEXT NOT NULL,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				ts TEXT NOT NULL,
 			actor TEXT NOT NULL,
 			action TEXT NOT NULL,
 			details_json TEXT NOT NULL,
@@ -490,13 +517,58 @@ func (s *Store) ListMedia(ctx context.Context, sortBy, order string, limit, offs
 
 func (s *Store) ListMediaFiltered(ctx context.Context, sortBy, order string, limit, offset int, filter MediaFilter) ([]MediaRecord, error) {
 	safeSort := "capture_time"
+	sortArgs := make([]any, 0, 4)
 	switch sortBy {
-	case "capture_time", "ingested_at", "file_name", "size_bytes", "kind":
-		safeSort = sortBy
+	case "capture_time":
+		safeSort = "capture_time"
+	case "ingested_at":
+		safeSort = "ingested_at"
+	case "file_name":
+		safeSort = "file_name"
+	case "size_bytes":
+		safeSort = "size_bytes"
+	case "kind":
+		safeSort = "kind"
+	case "make":
+		safeSort = "make"
+	case "model":
+		safeSort = "model"
+	case "camera_yaw":
+		safeSort = "camera_yaw"
+	case "camera_pitch":
+		safeSort = "camera_pitch"
+	case "camera_roll":
+		safeSort = "camera_roll"
+	case "gps_lat":
+		safeSort = "gps_lat"
+	case "gps_lon":
+		safeSort = "gps_lon"
+	case "state":
+		safeSort = "loc_state"
+	case "county":
+		safeSort = "loc_county"
+	case "city":
+		safeSort = "loc_city"
+	case "road":
+		safeSort = "loc_road"
+	case "extension":
+		safeSort = "extension"
+	case "distance":
+		if filter.HasNear {
+			// Use squared distance in lat/lon space for fast regional proximity sorting.
+			safeSort = "((gps_lat - ?) * (gps_lat - ?) + (gps_lon - ?) * (gps_lon - ?))"
+			sortArgs = append(sortArgs, filter.NearLat, filter.NearLat, filter.NearLon, filter.NearLon)
+		}
 	}
 	safeOrder := "DESC"
 	if strings.EqualFold(order, "asc") {
 		safeOrder = "ASC"
+	}
+	if strings.EqualFold(sortBy, "distance") {
+		// Distance sorting should default to nearest-first unless explicitly requested.
+		if !strings.EqualFold(order, "desc") {
+			safeOrder = "ASC"
+		}
 	}
 
 	where, args := buildLocationWhere(filter)
@@ -512,6 +584,7 @@ func (s *Store) ListMediaFiltered(ctx context.Context, sortBy, order string, lim
 		LIMIT ? OFFSET ?
 	`, where, safeSort, safeOrder)
 
+	args = append(args, sortArgs...)
 	args = append(args, limit, offset)
 	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -682,6 +755,164 @@ func (s *Store) ListMediaByIDs(ctx context.Context, ids []int64) ([]MediaRecord,
 func (s *Store) DeleteMediaByID(ctx context.Context, id int64) error {
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM media_files WHERE id = ?`, id)
 	return err
+}
+
+func (s *Store) CreateAlbum(ctx context.Context, name string) (*Album, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("album name is required")
+	}
+	if len(name) > 120 {
+		return nil, errors.New("album name too long")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO albums (name, created_at, updated_at) VALUES (?, ?, ?)`, name, now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAlbumByID(ctx, id)
+}
+
+func (s *Store) ListAlbums(ctx context.Context, limit int) ([]Album, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 500
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT a.id, a.name, a.created_at, a.updated_at, COUNT(ai.media_id) AS item_count
+		FROM albums a
+		LEFT JOIN album_items ai ON ai.album_id = a.id
+		GROUP BY a.id, a.name, a.created_at, a.updated_at
+		ORDER BY LOWER(a.name) ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Album, 0)
+	for rows.Next() {
+		var a Album
+		if err := rows.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.ItemCount); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAlbumByID(ctx context.Context, id int64) (*Album, error) {
+	row := s.DB.QueryRowContext(ctx, `
+		SELECT a.id, a.name, a.created_at, a.updated_at, COUNT(ai.media_id) AS item_count
+		FROM albums a
+		LEFT JOIN album_items ai ON ai.album_id = a.id
+		WHERE a.id = ?
+		GROUP BY a.id, a.name, a.created_at, a.updated_at
+	`, id)
+
+	var a Album
+	if err := row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.ItemCount); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (s *Store) AddMediaToAlbum(ctx context.Context, albumID int64, ids []int64) (added int, skipped int, err error) {
+	if albumID <= 0 {
+		return 0, len(ids), errors.New("invalid album_id")
+	}
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, id := range ids {
+		if id <= 0 {
+			skipped++
+			continue
+		}
+		res, execErr := tx.ExecContext(ctx, `INSERT OR IGNORE INTO album_items (album_id, media_id, added_at) VALUES (?, ?, ?)`, albumID, id, now)
+		if execErr != nil {
+			skipped++
+			continue
+		}
+		rowsAff, _ := res.RowsAffected()
+		if rowsAff > 0 {
+			added++
+		} else {
+			skipped++
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE albums SET updated_at = ? WHERE id = ?`, now, albumID); err != nil {
+		return added, skipped, err
+	}
+	if err = tx.Commit(); err != nil {
+		return added, skipped, err
+	}
+	return added, skipped, nil
+}
+
+func (s *Store) RemoveMediaFromAlbum(ctx context.Context, albumID int64, ids []int64) (removed int, skipped int, err error) {
+	if albumID <= 0 {
+		return 0, len(ids), errors.New("invalid album_id")
+	}
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, id := range ids {
+		if id <= 0 {
+			skipped++
+			continue
+		}
+		res, execErr := tx.ExecContext(ctx, `DELETE FROM album_items WHERE album_id = ? AND media_id = ?`, albumID, id)
+		if execErr != nil {
+			skipped++
+			continue
+		}
+		rowsAff, _ := res.RowsAffected()
+		if rowsAff > 0 {
+			removed++
+		} else {
+			skipped++
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE albums SET updated_at = ? WHERE id = ?`, now, albumID); err != nil {
+		return removed, skipped, err
+	}
+	if err = tx.Commit(); err != nil {
+		return removed, skipped, err
+	}
+	return removed, skipped, nil
 }
 
 func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error) {
@@ -1027,6 +1258,13 @@ func buildLocationWhere(filter MediaFilter) (string, []any) {
 		clauses = append(clauses, "gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
 	case "no":
 		clauses = append(clauses, "(gps_lat IS NULL OR gps_lon IS NULL)")
+	}
+	if filter.AlbumID > 0 {
+		clauses = append(clauses, "id IN (SELECT media_id FROM album_items WHERE album_id = ?)")
+		args = append(args, filter.AlbumID)
+	}
+	if filter.HasNear {
+		clauses = append(clauses, "gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
 	}
 
 	return strings.Join(clauses, " AND "), args

@@ -177,6 +177,10 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/media/{id}/download", a.withAuth(a.handleMediaDownload))
 	mux.HandleFunc("POST /api/media/download-zip", a.withAuth(a.handleMediaDownloadZip))
 	mux.HandleFunc("POST /api/media/delete", a.withAuth(a.handleMediaDelete))
+	mux.HandleFunc("GET /api/albums", a.withAuth(a.handleAlbumsList))
+	mux.HandleFunc("POST /api/albums", a.withAuth(a.handleAlbumsCreate))
+	mux.HandleFunc("POST /api/albums/{id}/add", a.withAuth(a.handleAlbumAdd))
+	mux.HandleFunc("POST /api/albums/{id}/remove", a.withAuth(a.handleAlbumRemove))
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
 	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
 	mux.HandleFunc("GET /api/audit", a.withAuth(a.handleAudit))
@@ -467,6 +471,14 @@ type mediaDownloadRequest struct {
 	IDs []int64 `json:"ids"`
 }
 
+type albumCreateRequest struct {
+	Name string `json:"name"`
+}
+
+type albumItemChangeRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
 func (a *App) handleMediaDownloadZip(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	var req mediaDownloadRequest
 	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
@@ -634,6 +646,110 @@ func (a *App) handleMediaDelete(w http.ResponseWriter, r *http.Request, authCtx 
 		"deleted":   deleted,
 		"not_found": notFound,
 		"failed":    failed,
+	})
+}
+
+func (a *App) handleAlbumsList(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	albums, err := a.store.ListAlbums(r.Context(), 1000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": albums})
+}
+
+func (a *App) handleAlbumsCreate(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	var req albumCreateRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	album, err := a.store.CreateAlbum(r.Context(), req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "album_created", map[string]any{
+		"album_id": album.ID,
+		"name":     album.Name,
+	})
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "item": album})
+}
+
+func (a *App) handleAlbumAdd(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	albumID, ok := parsePathInt64(r.PathValue("id"))
+	if !ok || albumID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid album id"})
+		return
+	}
+
+	var req albumItemChangeRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ids := normalizeIDs(req.IDs, 5000)
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ids must contain at least one positive id"})
+		return
+	}
+
+	added, skipped, err := a.store.AddMediaToAlbum(r.Context(), albumID, ids)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "album_items_added", map[string]any{
+		"album_id":   albumID,
+		"requested":  len(ids),
+		"added":      added,
+		"duplicates": skipped,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"album_id":  albumID,
+		"requested": len(ids),
+		"added":     added,
+		"skipped":   skipped,
+	})
+}
+
+func (a *App) handleAlbumRemove(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	albumID, ok := parsePathInt64(r.PathValue("id"))
+	if !ok || albumID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid album id"})
+		return
+	}
+
+	var req albumItemChangeRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ids := normalizeIDs(req.IDs, 5000)
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ids must contain at least one positive id"})
+		return
+	}
+
+	removed, skipped, err := a.store.RemoveMediaFromAlbum(r.Context(), albumID, ids)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "album_items_removed", map[string]any{
+		"album_id":  albumID,
+		"requested": len(ids),
+		"removed":   removed,
+		"missing":   skipped,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"album_id":  albumID,
+		"requested": len(ids),
+		"removed":   removed,
+		"skipped":   skipped,
 	})
 }
 
@@ -995,6 +1111,18 @@ func parsePositiveInt(raw string, fallback int) int {
 	return v
 }
 
+func parsePathInt64(raw string) (int64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 func nullFloat(v sql.NullFloat64) any {
 	if v.Valid {
 		return v.Float64
@@ -1074,6 +1202,15 @@ func mediaFilterFromRequest(r *http.Request) (db.MediaFilter, error) {
 		return db.MediaFilter{}, errors.New("invalid gps filter")
 	}
 
+	albumRaw := strings.TrimSpace(r.URL.Query().Get("album_id"))
+	if albumRaw != "" {
+		albumID, err := strconv.ParseInt(albumRaw, 10, 64)
+		if err != nil || albumID <= 0 {
+			return db.MediaFilter{}, errors.New("invalid album_id")
+		}
+		filter.AlbumID = albumID
+	}
+
 	from, err := normalizeFilterTime(r.URL.Query().Get("from"), false)
 	if err != nil {
 		return db.MediaFilter{}, errors.New("invalid from date")
@@ -1087,6 +1224,25 @@ func mediaFilterFromRequest(r *http.Request) (db.MediaFilter, error) {
 	}
 	filter.CaptureFrom = from
 	filter.CaptureTo = to
+
+	nearLatRaw := strings.TrimSpace(r.URL.Query().Get("near_lat"))
+	nearLonRaw := strings.TrimSpace(r.URL.Query().Get("near_lon"))
+	if nearLatRaw != "" || nearLonRaw != "" {
+		if nearLatRaw == "" || nearLonRaw == "" {
+			return db.MediaFilter{}, errors.New("near_lat and near_lon must both be provided")
+		}
+		nearLat, err := strconv.ParseFloat(nearLatRaw, 64)
+		if err != nil || nearLat < -90 || nearLat > 90 {
+			return db.MediaFilter{}, errors.New("invalid near_lat")
+		}
+		nearLon, err := strconv.ParseFloat(nearLonRaw, 64)
+		if err != nil || nearLon < -180 || nearLon > 180 {
+			return db.MediaFilter{}, errors.New("invalid near_lon")
+		}
+		filter.NearLat = nearLat
+		filter.NearLon = nearLon
+		filter.HasNear = true
+	}
 	return filter, nil
 }
 
