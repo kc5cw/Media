@@ -34,6 +34,18 @@ const logoutBtn = document.querySelector('#logoutBtn');
 const reloadMountPolicyBtn = document.querySelector('#reloadMountPolicyBtn');
 const mountPolicyList = document.querySelector('#mountPolicyList');
 const mountPolicyMsg = document.querySelector('#mountPolicyMsg');
+const selectionInfo = document.querySelector('#selectionInfo');
+const selectAllBtn = document.querySelector('#selectAllBtn');
+const clearSelectionBtn = document.querySelector('#clearSelectionBtn');
+const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
+const deleteCurrentBtn = document.querySelector('#deleteCurrentBtn');
+const backupForm = document.querySelector('#backupForm');
+const backupMode = document.querySelector('#backupMode');
+const backupDestination = document.querySelector('#backupDestination');
+const backupSSHPort = document.querySelector('#backupSSHPort');
+const backupAPIMethod = document.querySelector('#backupAPIMethod');
+const backupAPIToken = document.querySelector('#backupAPIToken');
+const backupStatus = document.querySelector('#backupStatus');
 
 let map;
 let mapLayer;
@@ -42,6 +54,9 @@ let mapFullLayer;
 let lastPoints = [];
 let ingestPoller;
 let mountPolicy = { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
+let mediaItems = [];
+let selectedIDs = new Set();
+let currentPreviewID = null;
 
 function leaflet() {
   // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
@@ -112,6 +127,68 @@ function bindEvents() {
     await loadDashboardData();
   });
 
+  selectAllBtn?.addEventListener('click', () => {
+    mediaItems.forEach((item) => selectedIDs.add(Number(item.id)));
+    renderMedia(mediaItems);
+  });
+
+  clearSelectionBtn?.addEventListener('click', () => {
+    selectedIDs.clear();
+    renderMedia(mediaItems);
+  });
+
+  deleteSelectedBtn?.addEventListener('click', async () => {
+    await deleteSelectedMedia(Array.from(selectedIDs));
+  });
+
+  deleteCurrentBtn?.addEventListener('click', async () => {
+    if (!currentPreviewID) return;
+    await deleteSelectedMedia([currentPreviewID]);
+  });
+
+  backupForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!backupDestination?.value.trim()) {
+      renderBackupStatus({ state: 'error', message: 'Destination is required.' });
+      return;
+    }
+    const mode = backupMode?.value || 'ssh';
+    const destination = backupDestination.value.trim();
+    if (!window.confirm(`Start backup now?\n\nMode: ${mode}\nDestination: ${destination}`)) {
+      return;
+    }
+    try {
+      await api('/api/backup', {
+        method: 'POST',
+        body: {
+          mode,
+          destination,
+          ssh_port: Number(backupSSHPort?.value || 0) || 0,
+          api_method: backupAPIMethod?.value || 'PUT',
+          api_token: backupAPIToken?.value || ''
+        }
+      });
+      renderBackupStatus({ state: 'running', mode, destination, message: 'Backup started...' });
+      await refreshBackupStatus();
+    } catch (err) {
+      renderBackupStatus({ state: 'error', message: err.message });
+    }
+  });
+
+  backupMode?.addEventListener('change', () => {
+    if (!backupDestination) return;
+    const mode = backupMode.value;
+    if (mode === 'ssh') {
+      backupDestination.placeholder = 'user@host:/backups/usbvault.tar.gz';
+    } else if (mode === 'rsync') {
+      backupDestination.placeholder = 'user@host:/backups/usbvault or /local/backup/dir';
+    } else if (mode === 's3') {
+      backupDestination.placeholder = 's3://bucket/usbvault/backup.tar.gz';
+    } else if (mode === 'api') {
+      backupDestination.placeholder = 'https://api.example.com/upload';
+    }
+  });
+
   mapExpandBtn?.addEventListener('click', () => {
     openMapModal();
   });
@@ -139,6 +216,8 @@ async function refreshAuthState() {
     statusChip.textContent = 'Setup required';
     setupCard.classList.remove('hidden');
     stopIngestPolling();
+    selectedIDs.clear();
+    clearPreview();
     return;
   }
 
@@ -146,6 +225,8 @@ async function refreshAuthState() {
     statusChip.textContent = 'Login required';
     loginCard.classList.remove('hidden');
     stopIngestPolling();
+    selectedIDs.clear();
+    clearPreview();
     return;
   }
 
@@ -354,15 +435,27 @@ function filterQuery(prefix) {
 }
 
 function renderMedia(items) {
+  mediaItems = items || [];
+  const visibleIDs = new Set(mediaItems.map((item) => Number(item.id)));
+  selectedIDs = new Set(Array.from(selectedIDs).filter((id) => visibleIDs.has(id)));
+
   mediaGrid.innerHTML = '';
-  if (!items.length) {
+  if (!mediaItems.length) {
+    updateSelectionInfo();
+    if (currentPreviewID && !visibleIDs.has(Number(currentPreviewID))) {
+      clearPreview();
+    }
     mediaGrid.innerHTML = '<p>No media found for this filter.</p>';
     return;
   }
 
-  items.forEach((item) => {
+  mediaItems.forEach((item) => {
     const tile = document.createElement('article');
     tile.className = 'tile';
+    const id = Number(item.id);
+    if (selectedIDs.has(id)) {
+      tile.classList.add('selected');
+    }
 
     const mediaEl = item.kind === 'video'
       ? `<video muted preload="metadata" src="${item.preview_url}"></video>`
@@ -375,12 +468,40 @@ function renderMedia(items) {
         <div class="muted">${escapeHtml(item.location || '')}</div>
       </div>`;
 
+    const select = document.createElement('label');
+    select.className = 'tile-select';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = selectedIDs.has(id);
+    checkbox.addEventListener('click', (event) => event.stopPropagation());
+    checkbox.addEventListener('change', (event) => {
+      event.stopPropagation();
+      if (checkbox.checked) {
+        selectedIDs.add(id);
+        tile.classList.add('selected');
+      } else {
+        selectedIDs.delete(id);
+        tile.classList.remove('selected');
+      }
+      updateSelectionInfo();
+    });
+    select.appendChild(checkbox);
+    select.addEventListener('click', (event) => event.stopPropagation());
+    tile.appendChild(select);
+
     tile.addEventListener('click', () => renderPreview(item));
     mediaGrid.appendChild(tile);
   });
+
+  updateSelectionInfo();
+  if (currentPreviewID && !visibleIDs.has(Number(currentPreviewID))) {
+    clearPreview();
+  }
 }
 
 function renderPreview(item) {
+  currentPreviewID = Number(item.id);
+  deleteCurrentBtn?.classList.remove('hidden');
   const safeName = escapeHtml(item.file_name);
   const ts = new Date(item.capture_time).toLocaleString();
 
@@ -397,6 +518,50 @@ function renderPreview(item) {
     <img src="${item.preview_url}" alt="${safeName}" />
     <p><strong>${safeName}</strong><br/>${ts}</p>
   `;
+}
+
+function clearPreview() {
+  currentPreviewID = null;
+  if (deleteCurrentBtn) {
+    deleteCurrentBtn.classList.add('hidden');
+  }
+  if (previewPane) {
+    previewPane.className = 'preview-empty';
+    previewPane.textContent = 'Select a file from the album.';
+  }
+}
+
+function updateSelectionInfo() {
+  if (!selectionInfo) return;
+  const count = selectedIDs.size;
+  selectionInfo.textContent = count === 1 ? '1 selected' : `${count} selected`;
+}
+
+async function deleteSelectedMedia(ids) {
+  const normalized = Array.from(new Set((ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  if (!normalized.length) {
+    return;
+  }
+
+  const label = normalized.length === 1 ? '1 file' : `${normalized.length} files`;
+  const confirmed = window.confirm(`Delete ${label}?\n\nThis removes files from storage and deletes their database records.`);
+  if (!confirmed) return;
+
+  try {
+    const result = await api('/api/media/delete', {
+      method: 'POST',
+      body: { ids: normalized }
+    });
+
+    normalized.forEach((id) => selectedIDs.delete(id));
+    if (currentPreviewID && normalized.includes(Number(currentPreviewID))) {
+      clearPreview();
+    }
+    await loadDashboardData();
+    statusChip.textContent = `Deleted ${result.deleted || 0} file(s), failed ${result.failed || 0}`;
+  } catch (err) {
+    statusChip.textContent = `Delete failed: ${err.message}`;
+  }
 }
 
 function renderMap(points) {
@@ -499,6 +664,32 @@ function renderMapFull(points) {
   }
 }
 
+async function refreshBackupStatus() {
+  if (!backupStatus) return;
+  const st = await api('/api/backup-status');
+  renderBackupStatus(st);
+}
+
+function renderBackupStatus(st) {
+  if (!backupStatus) return;
+  const state = String(st?.state || 'idle').toLowerCase();
+  if (state === 'running') {
+    const files = Number(st.files || 0);
+    const mb = Number(st.bytes || 0) / (1024 * 1024);
+    backupStatus.textContent = `Running: ${st.mode || 'backup'} -> ${st.destination || ''} | ${files} files | ${mb.toFixed(1)} MB`;
+    return;
+  }
+  if (state === 'success') {
+    backupStatus.textContent = `Completed: ${st.message || ''}`.trim();
+    return;
+  }
+  if (state === 'error') {
+    backupStatus.textContent = `Error: ${st.message || 'backup failed'}`;
+    return;
+  }
+  backupStatus.textContent = st?.message || 'Backup idle.';
+}
+
 async function api(url, options = {}) {
   const init = {
     method: options.method || 'GET',
@@ -531,8 +722,10 @@ function startIngestPolling() {
   if (ingestPoller) return;
   ingestPoller = setInterval(() => {
     refreshIngestStatus().catch(() => {});
+    refreshBackupStatus().catch(() => {});
   }, 1000);
   refreshIngestStatus().catch(() => {});
+  refreshBackupStatus().catch(() => {});
 }
 
 function stopIngestPolling() {

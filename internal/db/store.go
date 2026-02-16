@@ -606,6 +606,79 @@ func (s *Store) GetMediaByID(ctx context.Context, id int64) (*MediaRecord, error
 	return &rec, nil
 }
 
+func (s *Store) ListMediaByIDs(ctx context.Context, ids []int64) ([]MediaRecord, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, kind, file_name, extension, source_mount, source_path, dest_path, size_bytes, crc32, sha256,
+		       capture_time, gps_lat, gps_lon, make, model, camera_yaw, camera_pitch, camera_roll,
+		       loc_provider, loc_country, loc_state, loc_county, loc_city, loc_road, loc_house_number, loc_postcode, loc_display_name,
+		       metadata_json, source_mtime, ingested_at
+		FROM media_files
+		WHERE id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]MediaRecord, 0, len(ids))
+	for rows.Next() {
+		var rec MediaRecord
+		if err := rows.Scan(
+			&rec.ID,
+			&rec.Kind,
+			&rec.FileName,
+			&rec.Extension,
+			&rec.SourceMount,
+			&rec.SourcePath,
+			&rec.DestPath,
+			&rec.SizeBytes,
+			&rec.CRC32,
+			&rec.SHA256,
+			&rec.CaptureTime,
+			&rec.GPSLat,
+			&rec.GPSLon,
+			&rec.Make,
+			&rec.Model,
+			&rec.CameraYaw,
+			&rec.CameraPitch,
+			&rec.CameraRoll,
+			&rec.LocProvider,
+			&rec.Country,
+			&rec.State,
+			&rec.County,
+			&rec.City,
+			&rec.Road,
+			&rec.HouseNumber,
+			&rec.Postcode,
+			&rec.DisplayName,
+			&rec.Metadata,
+			&rec.SourceMTime,
+			&rec.IngestedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteMediaByID(ctx context.Context, id int64) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM media_files WHERE id = ?`, id)
+	return err
+}
+
 func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error) {
 	return s.ListMapPointsFiltered(ctx, limit, MediaFilter{})
 }

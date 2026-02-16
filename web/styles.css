@@ -198,6 +198,16 @@ input {
   background: rgba(7, 12, 22, 0.84);
 }
 
+select {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 11px 12px;
+  margin-top: 6px;
+  color: var(--text);
+  background: rgba(7, 12, 22, 0.84);
+}
+
 button {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   border: 0;
@@ -218,6 +228,11 @@ button.small {
   padding: 8px 12px;
   border-radius: 999px;
   font-size: 0.86rem;
+}
+
+button.danger {
+  background: linear-gradient(135deg, #ff6b83, #ffb36a);
+  color: #2b090f;
 }
 
 .error {
@@ -288,6 +303,20 @@ button.small {
 .actions {
   display: flex;
   gap: 10px;
+}
+
+.media-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.backup-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
 }
 
 .layout {
@@ -422,11 +451,37 @@ button.small {
   overflow: hidden;
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease;
+  position: relative;
 }
 
 .tile:hover {
   transform: translateY(-3px);
   border-color: rgba(61, 208, 255, 0.7);
+}
+
+.tile.selected {
+  border-color: rgba(255, 107, 131, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 107, 131, 0.35) inset;
+}
+
+.tile-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  background: rgba(5, 10, 18, 0.82);
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+}
+
+.tile-select input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .tile img,

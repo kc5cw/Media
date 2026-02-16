@@ -87,7 +87,10 @@
 
       <div class="layout">
         <section class="card viewer">
-          <h3>Preview Player</h3>
+          <div class="cardhead">
+            <h3>Preview Player</h3>
+            <button id="deleteCurrentBtn" class="danger small hidden">Delete Current</button>
+          </div>
           <div id="previewPane" class="preview-empty">Select a file from the album.</div>
         </section>
 
@@ -130,11 +133,51 @@
         <section class="card">
           <div class="cardhead">
             <h3>Media Library</h3>
-            <div id="activeFilter" class="muted"></div>
+            <div class="media-tools">
+              <div id="selectionInfo" class="muted">0 selected</div>
+              <button id="selectAllBtn" class="ghost small">Select All Shown</button>
+              <button id="clearSelectionBtn" class="ghost small">Clear</button>
+              <button id="deleteSelectedBtn" class="danger small">Delete Selected</button>
+            </div>
           </div>
+          <div id="activeFilter" class="muted"></div>
           <div id="mediaGrid" class="media-grid"></div>
         </section>
       </div>
+
+      <section class="card">
+        <div class="cardhead">
+          <h3>Backup Export</h3>
+        </div>
+        <p class="muted">Stream backup off-device without creating a second full archive locally.</p>
+        <form id="backupForm" class="backup-form">
+          <label>Mode
+            <select id="backupMode" name="mode">
+              <option value="ssh">SSH archive (tar.gz stream)</option>
+              <option value="rsync">Rsync sync (compressed transfer)</option>
+              <option value="s3">S3 archive (tar.gz stream)</option>
+              <option value="api">API upload (tar.gz stream)</option>
+            </select>
+          </label>
+          <label>Destination
+            <input id="backupDestination" name="destination" type="text" placeholder="user@host:/backups/usbvault.tar.gz | s3://bucket/key.tar.gz | https://api/upload" required />
+          </label>
+          <label>SSH Port (optional)
+            <input id="backupSSHPort" name="ssh_port" type="number" min="1" max="65535" placeholder="22" />
+          </label>
+          <label>API Method
+            <select id="backupAPIMethod" name="api_method">
+              <option value="PUT">PUT</option>
+              <option value="POST">POST</option>
+            </select>
+          </label>
+          <label>API Bearer Token (optional)
+            <input id="backupAPIToken" name="api_token" type="password" />
+          </label>
+          <button id="backupStartBtn" type="submit">Start Backup</button>
+        </form>
+        <div id="backupStatus" class="muted">Backup idle.</div>
+      </section>
 
       <section class="card">
         <h3>Recent Audit Trail</h3>

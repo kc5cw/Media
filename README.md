@@ -13,6 +13,8 @@ It detects removable drives, scans for image/video media, extracts metadata (EXI
 - Secure local auth (username/password) and session cookies.
 - Tamper-evident audit log chain for key system events.
 - Local web GUI for album browsing, sorting, map markers, and preview playback.
+- Multi-select delete workflow with confirmation and DB/file cleanup.
+- Streaming backup export to `ssh`, `rsync`, `s3`, or generic `api` endpoints.
 
 ## Install (macOS Users)
 
@@ -50,6 +52,29 @@ go run ./cmd/usbvault
 ```
 
 Then open `http://127.0.0.1:4987`.
+
+## Delete Media (GUI)
+
+From **Media Library**:
+
+- `Select All Shown` to select the current filtered set.
+- Click individual checkboxes to deselect specific files.
+- `Delete Selected` (or `Delete Current` in Preview Player) to remove files.
+- Confirm the prompt; USB Vault deletes files from disk and removes DB rows.
+
+## Backup Export (GUI)
+
+Use the **Backup Export** card to send backups without creating a second full local archive:
+
+- `SSH`: streams `tar.gz` directly to `user@host:/path/file.tar.gz`
+- `S3`: streams `tar.gz` using `aws s3 cp - s3://bucket/key.tar.gz`
+- `API`: streams `tar.gz` via `PUT` or `POST` to an upload endpoint
+- `Rsync`: compressed transfer sync to local/remote target (`rsync -az`)
+
+Notes:
+
+- For `S3`, the `aws` CLI must be installed and authenticated on the host.
+- For `SSH`/`Rsync`, remote host/path access must already be configured.
 
 ## Build a macOS App + DMG (Unsigned)
 

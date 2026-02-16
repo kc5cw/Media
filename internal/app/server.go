@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"businessplan/usbvault/internal/audit"
+	"businessplan/usbvault/internal/backup"
 	"businessplan/usbvault/internal/config"
 	"businessplan/usbvault/internal/db"
 	"businessplan/usbvault/internal/geocode"
@@ -34,6 +35,7 @@ const (
 type App struct {
 	store      *db.Store
 	audit      *audit.Logger
+	backuper   *backup.Manager
 	ingestor   *ingest.Manager
 	geocoder   *geocode.ReverseGeocoder
 	watcher    *usb.Watcher
@@ -60,11 +62,13 @@ func New(logger *log.Logger) (*App, error) {
 	}
 	auditLogger := audit.New(store)
 	geocoder := geocode.New(store)
+	backuper := backup.NewManager(store, logger)
 	ingestor := ingest.NewManager(store, auditLogger, geocoder, logger)
 
 	application := &App{
 		store:      store,
 		audit:      auditLogger,
+		backuper:   backuper,
 		ingestor:   ingestor,
 		geocoder:   geocoder,
 		logger:     logger,
@@ -161,15 +165,18 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/status", a.handleStatus)
 	mux.HandleFunc("GET /api/ingest-status", a.withAuth(a.handleIngestStatus))
+	mux.HandleFunc("GET /api/backup-status", a.withAuth(a.handleBackupStatus))
 	mux.HandleFunc("POST /api/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/login", a.handleLogin)
 	mux.HandleFunc("POST /api/logout", a.handleLogout)
 
 	mux.HandleFunc("GET /api/media", a.withAuth(a.handleMediaList))
 	mux.HandleFunc("GET /api/media/{id}/content", a.withAuth(a.handleMediaContent))
+	mux.HandleFunc("POST /api/media/delete", a.withAuth(a.handleMediaDelete))
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
 	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
 	mux.HandleFunc("GET /api/audit", a.withAuth(a.handleAudit))
+	mux.HandleFunc("POST /api/backup", a.withAuth(a.handleBackupStart))
 	mux.HandleFunc("GET /api/mount-policy", a.withAuth(a.handleMountPolicyGet))
 	mux.HandleFunc("POST /api/excluded-mounts", a.withAuth(a.handleExcludedMountsSet))
 	mux.HandleFunc("POST /api/storage", a.withAuth(a.handleSetStorage))
@@ -218,6 +225,11 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleIngestStatus(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
 	writeJSON(w, http.StatusOK, a.ingestor.GetStatus())
+}
+
+func (a *App) handleBackupStatus(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	writeJSON(w, http.StatusOK, a.backuper.GetStatus())
 }
 
 type setupRequest struct {
@@ -428,6 +440,79 @@ func (a *App) handleMediaContent(w http.ResponseWriter, r *http.Request, authCtx
 	http.ServeFile(w, r, rec.DestPath)
 }
 
+type mediaDeleteRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
+func (a *App) handleMediaDelete(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	var req mediaDeleteRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	ids := normalizeIDs(req.IDs, 5000)
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ids must contain at least one positive id"})
+		return
+	}
+
+	records, err := a.store.ListMediaByIDs(r.Context(), ids)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	recordByID := make(map[int64]db.MediaRecord, len(records))
+	for _, rec := range records {
+		recordByID[rec.ID] = rec
+	}
+
+	baseStorage, _, _ := a.store.GetSetting(r.Context(), baseStorageKey)
+	baseStorage = filepath.Clean(strings.TrimSpace(baseStorage))
+
+	deleted := 0
+	notFound := 0
+	failed := 0
+	for _, id := range ids {
+		rec, ok := recordByID[id]
+		if !ok {
+			notFound++
+			continue
+		}
+
+		destPath := filepath.Clean(rec.DestPath)
+		if baseStorage != "." && baseStorage != "" && !config.IsPathWithin(destPath, baseStorage) {
+			failed++
+			continue
+		}
+
+		if err := os.Remove(destPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			failed++
+			continue
+		}
+		if err := a.store.DeleteMediaByID(r.Context(), id); err != nil {
+			failed++
+			continue
+		}
+		cleanupEmptyParents(destPath, baseStorage)
+		deleted++
+	}
+
+	_ = a.audit.Log(r.Context(), authCtx.Username, "media_deleted", map[string]any{
+		"requested": len(ids),
+		"deleted":   deleted,
+		"not_found": notFound,
+		"failed":    failed,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"requested": len(ids),
+		"deleted":   deleted,
+		"not_found": notFound,
+		"failed":    failed,
+	})
+}
+
 func (a *App) handleMap(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
 	filter := db.MediaFilter{
@@ -620,6 +705,46 @@ func (a *App) handleCloudSyncSet(w http.ResponseWriter, r *http.Request, authCtx
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+type backupStartRequest struct {
+	Mode        string `json:"mode"`
+	Destination string `json:"destination"`
+	SSHPort     int    `json:"ssh_port"`
+	APIMethod   string `json:"api_method"`
+	APIToken    string `json:"api_token"`
+}
+
+func (a *App) handleBackupStart(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	var req backupStartRequest
+	if err := decodeJSONBody(r, &req, 1<<20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	err := a.backuper.Start(authCtx.Username, backup.Request{
+		Mode:        req.Mode,
+		Destination: req.Destination,
+		SSHPort:     req.SSHPort,
+		APIMethod:   req.APIMethod,
+		APIToken:    req.APIToken,
+	})
+	if err != nil {
+		if errors.Is(err, backup.ErrBusy) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, backup.ErrInvalidRequest) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "backup_started", map[string]any{
+		"mode":        req.Mode,
+		"destination": req.Destination,
+	})
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
 func (a *App) issueSession(w http.ResponseWriter, userID int64, username string) error {
 	token, err := security.NewSessionToken()
 	if err != nil {
@@ -808,4 +933,45 @@ func (a *App) getExcludedMounts(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return config.ParsePathList(raw), nil
+}
+
+func normalizeIDs(ids []int64, max int) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func cleanupEmptyParents(filePath, stopDir string) {
+	stopDir = strings.TrimSpace(stopDir)
+	if stopDir == "" {
+		return
+	}
+	stopDir = filepath.Clean(stopDir)
+	dir := filepath.Dir(filePath)
+	for {
+		if !config.IsPathWithin(dir, stopDir) || config.PathKey(dir) == config.PathKey(stopDir) {
+			return
+		}
+		err := os.Remove(dir)
+		if err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
