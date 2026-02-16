@@ -39,6 +39,14 @@ type Manager struct {
 
 	statusMu sync.Mutex
 	status   Status
+
+	rateMu      sync.Mutex
+	rateSamples []rateSample
+}
+
+type rateSample struct {
+	At    time.Time
+	Bytes int64
 }
 
 type Result struct {
@@ -92,9 +100,13 @@ func (m *Manager) GetStatus() Status {
 			elapsed := time.Since(started).Seconds()
 			if elapsed > 0 {
 				st.FilesPerSec = float64(st.ProcessedFiles) / elapsed
-				st.MBps = (float64(st.CopiedBytes) / elapsed) / (1024.0 * 1024.0)
 			}
 		}
+	}
+	if st.State == "ingesting" {
+		st.MBps = m.currentMBps()
+	} else {
+		st.MBps = 0
 	}
 	if st.TotalFiles > 0 {
 		st.Percent = (float64(st.ProcessedFiles) / float64(st.TotalFiles)) * 100.0
@@ -183,6 +195,7 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Message:   "Scanning for media...",
 	})
+	m.resetRateSamples()
 
 	_ = m.audit.Log(ctx, actor, "ingest_started", map[string]any{"mount": mountPath})
 
@@ -337,6 +350,88 @@ func (m *Manager) bumpStatus(update func(st *Status)) {
 	update(&m.status)
 }
 
+func (m *Manager) addCopiedBytes(delta int64) {
+	if delta == 0 {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	m.bumpStatus(func(st *Status) {
+		st.CopiedBytes += delta
+		if st.CopiedBytes < 0 {
+			st.CopiedBytes = 0
+		}
+		st.UpdatedAt = now
+	})
+	if delta > 0 {
+		m.recordRateSample(delta)
+	}
+}
+
+func (m *Manager) resetRateSamples() {
+	m.rateMu.Lock()
+	defer m.rateMu.Unlock()
+	m.rateSamples = nil
+}
+
+func (m *Manager) recordRateSample(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+
+	now := time.Now()
+	cutoff := now.Add(-10 * time.Second)
+
+	m.rateMu.Lock()
+	defer m.rateMu.Unlock()
+
+	m.rateSamples = append(m.rateSamples, rateSample{At: now, Bytes: bytes})
+	trim := 0
+	for trim < len(m.rateSamples) && m.rateSamples[trim].At.Before(cutoff) {
+		trim++
+	}
+	if trim > 0 {
+		m.rateSamples = append([]rateSample(nil), m.rateSamples[trim:]...)
+	}
+}
+
+func (m *Manager) currentMBps() float64 {
+	now := time.Now()
+	recentCutoff := now.Add(-3 * time.Second)
+	keepCutoff := now.Add(-10 * time.Second)
+
+	m.rateMu.Lock()
+	defer m.rateMu.Unlock()
+
+	trim := 0
+	for trim < len(m.rateSamples) && m.rateSamples[trim].At.Before(keepCutoff) {
+		trim++
+	}
+	if trim > 0 {
+		m.rateSamples = append([]rateSample(nil), m.rateSamples[trim:]...)
+	}
+
+	var bytes int64
+	var first time.Time
+	for _, sample := range m.rateSamples {
+		if sample.At.Before(recentCutoff) {
+			continue
+		}
+		if first.IsZero() {
+			first = sample.At
+		}
+		bytes += sample.Bytes
+	}
+	if bytes <= 0 {
+		return 0
+	}
+
+	elapsed := now.Sub(first).Seconds()
+	if elapsed <= 0 {
+		elapsed = 0.001
+	}
+	return (float64(bytes) / elapsed) / (1024.0 * 1024.0)
+}
+
 func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout, srcPath, kind, actor string, result *Result) error {
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -411,13 +506,16 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	if err != nil {
 		return err
 	}
-	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime()); err != nil {
+	var copiedThisFile int64
+	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime(), func(n int64) {
+		copiedThisFile += n
+		m.addCopiedBytes(n)
+	}); err != nil {
+		if copiedThisFile > 0 {
+			m.addCopiedBytes(-copiedThisFile)
+		}
 		return err
 	}
-	m.bumpStatus(func(st *Status) {
-		st.CopiedBytes += info.Size()
-		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	})
 	rec.DestPath = destPath
 
 	if err := m.store.InsertMedia(ctx, rec); err != nil {
@@ -564,7 +662,7 @@ func sanitizeFolderName(name string) string {
 	return name
 }
 
-func copyFileAtomic(srcPath, dstPath string, srcMode fs.FileMode, modTime time.Time) error {
+func copyFileAtomic(srcPath, dstPath string, srcMode fs.FileMode, modTime time.Time, onProgress func(int64)) error {
 	tmpPath := dstPath + ".part"
 
 	src, err := os.Open(srcPath)
@@ -580,7 +678,12 @@ func copyFileAtomic(srcPath, dstPath string, srcMode fs.FileMode, modTime time.T
 
 	copyErr := func() error {
 		defer dst.Close()
-		if _, err := io.Copy(dst, src); err != nil {
+		copySrc := io.Reader(src)
+		if onProgress != nil {
+			copySrc = &progressReader{r: src, onProgress: onProgress}
+		}
+		buf := make([]byte, 1024*1024)
+		if _, err := io.CopyBuffer(dst, copySrc, buf); err != nil {
 			return err
 		}
 		if err := dst.Sync(); err != nil {
@@ -602,6 +705,19 @@ func copyFileAtomic(srcPath, dstPath string, srcMode fs.FileMode, modTime time.T
 	_ = os.Chmod(dstPath, 0o440)
 	_ = srcMode
 	return nil
+}
+
+type progressReader struct {
+	r          io.Reader
+	onProgress func(int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 && p.onProgress != nil {
+		p.onProgress(int64(n))
+	}
+	return n, err
 }
 
 func fileExists(path string) bool {
