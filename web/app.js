@@ -26,6 +26,12 @@ const clearPlaceBtn = document.querySelector('#clearPlaceBtn');
 const mapExpandBtn = document.querySelector('#mapExpandBtn');
 const mapModal = document.querySelector('#mapModal');
 const mapCloseBtn = document.querySelector('#mapCloseBtn');
+const mapTimeframeSelect = document.querySelector('#mapTimeframeSelect');
+const mapAlbumSelect = document.querySelector('#mapAlbumSelect');
+const mapStateSelect = document.querySelector('#mapStateSelect');
+const mapCitySelect = document.querySelector('#mapCitySelect');
+const mapFilterApplyBtn = document.querySelector('#mapFilterApplyBtn');
+const mapFilterResetBtn = document.querySelector('#mapFilterResetBtn');
 
 const setupForm = document.querySelector('#setupForm');
 const loginForm = document.querySelector('#loginForm');
@@ -86,6 +92,8 @@ let currentPreviewID = null;
 let viewMode = 'all';
 let albums = [];
 let activeAlbumID = 0;
+let mapStates = [];
+let mapCities = [];
 
 function leaflet() {
   // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
@@ -112,6 +120,13 @@ const mediaFilter = {
   nearLon: ''
 };
 
+const mapFilter = {
+  timeframe: 'all',
+  albumID: '',
+  state: '',
+  city: ''
+};
+
 init().catch((err) => {
   console.error(err);
   statusChip.textContent = `Initialization error: ${err?.message || err}`;
@@ -120,6 +135,7 @@ init().catch((err) => {
 async function init() {
   bindEvents();
   writeMediaFilterControls();
+  writeMapFilterControls();
   await refreshAuthState();
 }
 
@@ -366,6 +382,48 @@ function bindEvents() {
     }
   });
 
+  mapTimeframeSelect?.addEventListener('change', async () => {
+    readMapFilterControls();
+    mapFilter.state = '';
+    mapFilter.city = '';
+    writeMapFilterControls();
+    await loadMapFilterOptions();
+  });
+
+  mapAlbumSelect?.addEventListener('change', async () => {
+    readMapFilterControls();
+    mapFilter.state = '';
+    mapFilter.city = '';
+    writeMapFilterControls();
+    await loadMapFilterOptions();
+  });
+
+  mapStateSelect?.addEventListener('change', async () => {
+    readMapFilterControls();
+    mapFilter.city = '';
+    writeMapFilterControls();
+    await loadMapCityOptions();
+  });
+
+  mapFilterApplyBtn?.addEventListener('click', async () => {
+    try {
+      readMapFilterControls();
+      await loadMapData();
+    } catch (err) {
+      statusChip.textContent = `Map filter failed: ${err.message}`;
+    }
+  });
+
+  mapFilterResetBtn?.addEventListener('click', async () => {
+    mapFilter.timeframe = 'all';
+    mapFilter.albumID = '';
+    mapFilter.state = '';
+    mapFilter.city = '';
+    writeMapFilterControls();
+    await loadMapFilterOptions();
+    await loadMapData();
+  });
+
   mapExpandBtn?.addEventListener('click', () => {
     openMapModal();
   });
@@ -396,6 +454,8 @@ async function refreshAuthState() {
     viewMode = 'all';
     activeAlbumID = 0;
     albums = [];
+    mapStates = [];
+    mapCities = [];
     selectedIDs.clear();
     clearPreview();
     return;
@@ -408,6 +468,8 @@ async function refreshAuthState() {
     viewMode = 'all';
     activeAlbumID = 0;
     albums = [];
+    mapStates = [];
+    mapCities = [];
     selectedIDs.clear();
     clearPreview();
     return;
@@ -419,6 +481,7 @@ async function refreshAuthState() {
   renderViewModeState();
   startIngestPolling();
   await loadAlbums();
+  await loadMapFilterOptions();
   await loadDashboardData();
 }
 
@@ -434,6 +497,7 @@ async function loadDashboardData() {
     await loadAlbums();
     await loadAutoAlbumStates();
   }
+  await loadMapFilterOptions();
 
   const mediaSort = mediaFilter.sort || 'capture_time';
   const mediaOrder = mediaFilter.order || 'desc';
@@ -442,7 +506,7 @@ async function loadDashboardData() {
     showAlbumMedia
       ? api(`/api/media?size=180&sort=${encodeURIComponent(mediaSort)}&order=${encodeURIComponent(mediaOrder)}${filterQuery('&')}`)
       : Promise.resolve({ items: [] }),
-    showAlbumMedia ? api(`/api/map${filterQuery('?')}`) : Promise.resolve({ points: [] }),
+    api(`/api/map${mapFilterQuery('?')}`),
     api('/api/audit')
   ]);
 
@@ -645,7 +709,7 @@ function renderMountPolicy() {
 }
 
 async function loadAlbums() {
-  if (!albumList) return;
+  if (!albumList && !mapAlbumSelect) return;
   try {
     const payload = await api('/api/albums');
     albums = payload.items || [];
@@ -653,8 +717,11 @@ async function loadAlbums() {
       activeAlbumID = 0;
     }
     renderAlbums();
+    renderMapAlbumOptions();
   } catch (err) {
-    albumList.innerHTML = `<div class="muted">Album list unavailable: ${escapeHtml(err.message)}</div>`;
+    if (albumList) {
+      albumList.innerHTML = `<div class="muted">Album list unavailable: ${escapeHtml(err.message)}</div>`;
+    }
   }
 }
 
@@ -729,6 +796,160 @@ function renderViewModeState() {
   albumActions?.classList.toggle('hidden', !albumsMode);
   albumViewPanel?.classList.toggle('hidden', !albumsMode);
   removeSelectedFromAlbumBtn?.classList.toggle('hidden', !(albumsMode && activeAlbumID > 0));
+}
+
+function readMapFilterControls() {
+  mapFilter.timeframe = String(mapTimeframeSelect?.value || 'all').trim() || 'all';
+  mapFilter.albumID = String(mapAlbumSelect?.value || '').trim();
+  mapFilter.state = String(mapStateSelect?.value || '').trim();
+  mapFilter.city = String(mapCitySelect?.value || '').trim();
+}
+
+function writeMapFilterControls() {
+  if (mapTimeframeSelect) mapTimeframeSelect.value = mapFilter.timeframe || 'all';
+  if (mapAlbumSelect) mapAlbumSelect.value = mapFilter.albumID || '';
+  if (mapStateSelect) mapStateSelect.value = mapFilter.state || '';
+  if (mapCitySelect) mapCitySelect.value = mapFilter.city || '';
+}
+
+async function loadMapFilterOptions() {
+  readMapFilterControls();
+  renderMapAlbumOptions();
+  await loadMapStateOptions();
+  await loadMapCityOptions();
+  writeMapFilterControls();
+}
+
+function renderMapAlbumOptions() {
+  if (!mapAlbumSelect) return;
+
+  const chosen = mapFilter.albumID || '';
+  mapAlbumSelect.innerHTML = '';
+  addSelectOption(mapAlbumSelect, '', 'Album: all');
+
+  (albums || []).forEach((album) => {
+    addSelectOption(
+      mapAlbumSelect,
+      String(album.id),
+      `Album: ${album.name} (${Number(album.item_count || 0)})`
+    );
+  });
+
+  if (chosen && !albums.some((album) => String(album.id) === chosen)) {
+    mapFilter.albumID = '';
+  } else {
+    mapFilter.albumID = chosen;
+  }
+  mapAlbumSelect.value = mapFilter.albumID || '';
+}
+
+async function loadMapStateOptions() {
+  if (!mapStateSelect) return;
+
+  const query = mapFilterAuxQuery(false);
+  const payload = await api(`/api/location-groups?level=state${query}`);
+  mapStates = payload.groups || [];
+
+  const chosen = mapFilter.state || '';
+  mapStateSelect.innerHTML = '';
+  addSelectOption(mapStateSelect, '', 'State: all');
+  mapStates.forEach((group) => addSelectOption(mapStateSelect, group.name || '', `State: ${group.name || 'Unknown'}`));
+
+  if (chosen && !mapStates.some((g) => String(g.name || '') === chosen)) {
+    mapFilter.state = '';
+    mapFilter.city = '';
+  } else {
+    mapFilter.state = chosen;
+  }
+  mapStateSelect.value = mapFilter.state || '';
+}
+
+async function loadMapCityOptions() {
+  if (!mapCitySelect) return;
+
+  const query = mapFilterAuxQuery(true);
+  const payload = await api(`/api/location-groups?level=city${query}`);
+  mapCities = payload.groups || [];
+
+  const chosen = mapFilter.city || '';
+  mapCitySelect.innerHTML = '';
+  addSelectOption(mapCitySelect, '', 'City: all');
+  mapCities.forEach((group) => addSelectOption(mapCitySelect, group.name || '', `City: ${group.name || 'Unknown'}`));
+
+  if (chosen && !mapCities.some((g) => String(g.name || '') === chosen)) {
+    mapFilter.city = '';
+  } else {
+    mapFilter.city = chosen;
+  }
+  mapCitySelect.value = mapFilter.city || '';
+}
+
+function mapFilterAuxQuery(includeState) {
+  const params = new URLSearchParams();
+  params.set('gps', 'yes');
+  if (mapFilter.albumID) params.set('album_id', mapFilter.albumID);
+  if (includeState && mapFilter.state) params.set('state', mapFilter.state);
+
+  const range = mapTimeRange(mapFilter.timeframe);
+  if (range.from) params.set('from', range.from);
+  if (range.to) params.set('to', range.to);
+
+  const raw = params.toString();
+  return raw ? `&${raw}` : '';
+}
+
+function mapFilterQuery(prefix) {
+  readMapFilterControls();
+  const params = new URLSearchParams();
+  if (mapFilter.albumID) params.set('album_id', mapFilter.albumID);
+  if (mapFilter.state) params.set('state', mapFilter.state);
+  if (mapFilter.city) params.set('city', mapFilter.city);
+  const range = mapTimeRange(mapFilter.timeframe);
+  if (range.from) params.set('from', range.from);
+  if (range.to) params.set('to', range.to);
+  const raw = params.toString();
+  return raw ? `${prefix}${raw}` : '';
+}
+
+function mapTimeRange(timeframe) {
+  const value = String(timeframe || 'all').trim().toLowerCase();
+  const now = new Date();
+  let hours = 0;
+  switch (value) {
+    case '24h':
+      hours = 24;
+      break;
+    case '7d':
+      hours = 24 * 7;
+      break;
+    case '30d':
+      hours = 24 * 30;
+      break;
+    case '90d':
+      hours = 24 * 90;
+      break;
+    case '365d':
+      hours = 24 * 365;
+      break;
+    default:
+      return { from: '', to: '' };
+  }
+
+  const from = new Date(now.getTime() - hours * 3600 * 1000);
+  return { from: from.toISOString(), to: now.toISOString() };
+}
+
+async function loadMapData() {
+  const mapRes = await api(`/api/map${mapFilterQuery('?')}`);
+  renderMap(mapRes.points || []);
+}
+
+function addSelectOption(select, value, label) {
+  if (!select) return;
+  const option = document.createElement('option');
+  option.value = String(value || '');
+  option.textContent = String(label || '');
+  select.appendChild(option);
 }
 
 function filterQuery(prefix) {

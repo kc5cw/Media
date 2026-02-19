@@ -141,6 +141,11 @@ From **Media Library**:
 - Use `Download ZIP` to export selected files in one archive stream.
 - In **Preview Player**, use `Download Current` for a single item.
 
+From **Map**:
+
+- Use map-specific filters for `timeframe`, `album`, `state`, and `city`.
+- Map filters are independent from media-grid filters, so you can view long-term map history while browsing a narrow media subset.
+
 ## Albums + Advanced Sorting (GUI)
 
 - `All Media` keeps the full library view.
