@@ -323,6 +323,113 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 	return result, nil
 }
 
+func (m *Manager) ProcessUploadedFiles(ctx context.Context, actor string, srcPaths []string) (Result, error) {
+	var result Result
+	if len(srcPaths) == 0 {
+		return result, nil
+	}
+
+	baseStorage, ok, err := m.store.GetSetting(ctx, baseStorageSetting)
+	if err != nil {
+		return result, err
+	}
+	if !ok || strings.TrimSpace(baseStorage) == "" {
+		return result, errors.New("base storage is not configured")
+	}
+	baseStorage = filepath.Clean(baseStorage)
+	if err := os.MkdirAll(baseStorage, 0o750); err != nil {
+		return result, fmt.Errorf("ensure base storage: %w", err)
+	}
+
+	layout := storageLayoutLocationDate
+	if raw, ok, err := m.store.GetSetting(ctx, storageLayoutSetting); err == nil && ok {
+		layout = normalizeStorageLayout(raw)
+	}
+
+	type item struct {
+		path string
+		kind string
+		size int64
+	}
+	items := make([]item, 0, len(srcPaths))
+	var totalBytes int64
+
+	m.setStatus(Status{
+		State:     "scanning",
+		Mount:     "manual_upload",
+		Phase:     "scan",
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message:   "Preparing uploaded media...",
+	})
+	m.resetRateSamples()
+
+	for _, rawPath := range srcPaths {
+		path := filepath.Clean(strings.TrimSpace(rawPath))
+		if path == "" {
+			continue
+		}
+		kind, supported := config.IsSupportedMedia(path)
+		if !supported {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.Size() == 0 {
+			continue
+		}
+		items = append(items, item{path: path, kind: kind, size: info.Size()})
+		totalBytes += info.Size()
+		result.Scanned++
+	}
+
+	m.bumpStatus(func(st *Status) {
+		st.State = "ingesting"
+		st.Phase = "ingest"
+		st.TotalFiles = len(items)
+		st.TotalBytes = totalBytes
+		st.Message = "Ingesting uploaded media..."
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	})
+
+	for _, it := range items {
+		m.bumpStatus(func(st *Status) {
+			st.CurrentPath = it.path
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
+
+		if err := m.ingestFile(ctx, "manual_upload", baseStorage, layout, it.path, it.kind, actor, &result); err != nil {
+			result.Errors++
+			m.logger.Printf("upload ingest file error %s: %v", it.path, err)
+		}
+
+		m.bumpStatus(func(st *Status) {
+			st.ProcessedFiles++
+			st.CopiedFiles = result.Copied
+			st.Duplicates = result.Duplicates
+			st.Errors = result.Errors
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		})
+	}
+
+	_ = m.audit.Log(ctx, actor, "upload_ingest_completed", map[string]any{
+		"scanned":    result.Scanned,
+		"copied":     result.Copied,
+		"duplicates": result.Duplicates,
+		"errors":     result.Errors,
+	})
+
+	m.setStatus(Status{
+		State:      "idle",
+		Mount:      "",
+		Phase:      "",
+		StartedAt:  "",
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Message:    "Idle",
+		LastResult: result,
+	})
+	return result, nil
+}
+
 func shouldSkipMount(mountPath, baseStorage string, excludedMounts []string) bool {
 	// Never ingest from the destination storage drive/mount itself.
 	if config.IsPathWithin(baseStorage, mountPath) || config.IsPathWithin(mountPath, baseStorage) {

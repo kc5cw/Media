@@ -35,6 +35,8 @@ const reloadMountPolicyBtn = document.querySelector('#reloadMountPolicyBtn');
 const mountPolicyList = document.querySelector('#mountPolicyList');
 const mountPolicyMsg = document.querySelector('#mountPolicyMsg');
 const selectionInfo = document.querySelector('#selectionInfo');
+const uploadMediaBtn = document.querySelector('#uploadMediaBtn');
+const uploadMediaInput = document.querySelector('#uploadMediaInput');
 const selectAllBtn = document.querySelector('#selectAllBtn');
 const clearSelectionBtn = document.querySelector('#clearSelectionBtn');
 const deleteSelectedBtn = document.querySelector('#deleteSelectedBtn');
@@ -170,6 +172,17 @@ function bindEvents() {
   selectAllBtn?.addEventListener('click', () => {
     mediaItems.forEach((item) => selectedIDs.add(Number(item.id)));
     renderMedia(mediaItems);
+  });
+
+  uploadMediaBtn?.addEventListener('click', () => {
+    uploadMediaInput?.click();
+  });
+
+  uploadMediaInput?.addEventListener('change', async () => {
+    const files = Array.from(uploadMediaInput.files || []);
+    if (!files.length) return;
+    await uploadMediaFiles(files);
+    uploadMediaInput.value = '';
   });
 
   clearSelectionBtn?.addEventListener('click', () => {
@@ -1003,6 +1016,40 @@ function parseFilenameFromContentDisposition(raw) {
   const match = value.match(/filename=\"?([^\";]+)\"?/i);
   if (!match) return '';
   return match[1].trim();
+}
+
+async function uploadMediaFiles(files) {
+  const normalized = (files || []).filter((file) => file && Number(file.size || 0) > 0);
+  if (!normalized.length) {
+    statusChip.textContent = 'No non-empty files selected for upload.';
+    return;
+  }
+
+  const label = normalized.length === 1 ? '1 file' : `${normalized.length} files`;
+  if (!window.confirm(`Upload ${label} into USB Vault now?\n\nThey will be processed with normal dedupe + EXIF flow.`)) {
+    return;
+  }
+
+  const form = new FormData();
+  normalized.forEach((file) => form.append('files', file, file.name || 'upload.bin'));
+
+  statusChip.textContent = `Uploading ${label}...`;
+  try {
+    const response = await fetch('/api/media/upload', {
+      method: 'POST',
+      credentials: 'include',
+      body: form
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Upload failed (${response.status})`);
+    }
+    const result = payload.result || {};
+    statusChip.textContent = `Upload complete: copied ${result.copied || 0}, duplicates ${result.duplicates || 0}, errors ${result.errors || 0}`;
+    await loadDashboardData();
+  } catch (err) {
+    statusChip.textContent = `Upload failed: ${err.message}`;
+  }
 }
 
 function renderMap(points) {

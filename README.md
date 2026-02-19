@@ -135,6 +135,7 @@ From **Media Library**:
 
 From **Media Library**:
 
+- Use `Upload Media` to manually ingest local files through the same dedupe/EXIF/location pipeline as USB imports.
 - Filter by location, type (`image`/`video`), GPS presence, capture date range, and text search.
 - Use `Download Files` for per-file browser downloads (parallel TCP sessions, browser-limited).
 - Use `Download ZIP` to export selected files in one archive stream.

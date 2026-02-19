@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +33,9 @@ const (
 	sessionCookieName = "uv_session"
 	baseStorageKey    = "base_storage_dir"
 	cloudSyncKey      = "cloud_sync_config"
+
+	uploadMaxRequestBytes = int64(8 << 30) // 8 GiB
+	uploadMaxFiles        = 2000
 )
 
 type App struct {
@@ -176,6 +180,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/media/{id}/content", a.withAuth(a.handleMediaContent))
 	mux.HandleFunc("GET /api/media/{id}/download", a.withAuth(a.handleMediaDownload))
 	mux.HandleFunc("POST /api/media/download-zip", a.withAuth(a.handleMediaDownloadZip))
+	mux.HandleFunc("POST /api/media/upload", a.withAuth(a.handleMediaUpload))
 	mux.HandleFunc("POST /api/media/delete", a.withAuth(a.handleMediaDelete))
 	mux.HandleFunc("GET /api/albums", a.withAuth(a.handleAlbumsList))
 	mux.HandleFunc("POST /api/albums", a.withAuth(a.handleAlbumsCreate))
@@ -577,6 +582,99 @@ func (a *App) handleMediaDownloadZip(w http.ResponseWriter, r *http.Request, aut
 		"requested": len(ids),
 		"written":   written,
 		"skipped":   skipped,
+	})
+}
+
+func (a *App) handleMediaUpload(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	r.Body = http.MaxBytesReader(w, r.Body, uploadMaxRequestBytes)
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart upload"})
+		return
+	}
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
+
+	files := make([]*multipart.FileHeader, 0)
+	if r.MultipartForm != nil {
+		files = append(files, r.MultipartForm.File["files"]...)
+		if len(files) == 0 {
+			for _, group := range r.MultipartForm.File {
+				files = append(files, group...)
+			}
+		}
+	}
+	if len(files) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no upload files provided"})
+		return
+	}
+	if len(files) > uploadMaxFiles {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many files in one upload"})
+		return
+	}
+
+	tmpDir, err := os.MkdirTemp("", "usbvault-upload-*")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to prepare upload workspace"})
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	staged := make([]string, 0, len(files))
+	buf := make([]byte, 1024*1024)
+	for i, fh := range files {
+		if fh == nil || fh.Size == 0 {
+			continue
+		}
+		src, err := fh.Open()
+		if err != nil {
+			continue
+		}
+
+		name := sanitizeDownloadFilename(filepath.Base(fh.Filename))
+		if name == "" {
+			name = fmt.Sprintf("upload_%06d.bin", i+1)
+		}
+		dstPath := filepath.Join(tmpDir, fmt.Sprintf("%06d_%s", i+1, name))
+		dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			_ = src.Close()
+			continue
+		}
+		_, copyErr := io.CopyBuffer(dst, src, buf)
+		_ = dst.Close()
+		_ = src.Close()
+		if copyErr != nil {
+			_ = os.Remove(dstPath)
+			continue
+		}
+		staged = append(staged, dstPath)
+	}
+	if len(staged) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no supported non-empty files were uploaded"})
+		return
+	}
+
+	res, err := a.ingestor.ProcessUploadedFiles(r.Context(), authCtx.Username, staged)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = a.audit.Log(r.Context(), authCtx.Username, "media_uploaded", map[string]any{
+		"uploaded_files": len(staged),
+		"scanned":        res.Scanned,
+		"copied":         res.Copied,
+		"duplicates":     res.Duplicates,
+		"errors":         res.Errors,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"staged":  len(staged),
+		"result":  res,
+		"message": "Upload ingest completed",
 	})
 }
 

@@ -138,6 +138,7 @@
             <h3>Media Library</h3>
             <div class="media-tools">
               <div id="selectionInfo" class="muted">0 selected</div>
+              <button id="uploadMediaBtn" class="ghost small">Upload Media</button>
               <button id="downloadSelectedFilesBtn" class="ghost small">Download Files</button>
               <button id="downloadSelectedZipBtn" class="ghost small">Download ZIP</button>
               <button id="selectAllBtn" class="ghost small">Select All Shown</button>
@@ -145,6 +146,7 @@
               <button id="deleteSelectedBtn" class="danger small">Delete Selected</button>
             </div>
           </div>
+          <input id="uploadMediaInput" class="hidden" type="file" multiple accept="image/*,video/*,.ts,.m2ts,.mts,.mpeg,.mpg,.mov,.mp4,.lrv,.insv,.dng,.heic,.heif,.hdr,.exr" />
           <div class="library-mode-row">
             <div class="mode-buttons">
               <button id="viewAllMediaBtn" class="ghost small active">All Media</button>
