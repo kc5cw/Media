@@ -492,6 +492,11 @@ button.active {
   white-space: nowrap;
 }
 
+.map-points-info {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .browse-layout {
   display: grid;
   grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 2.1fr);

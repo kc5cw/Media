@@ -858,12 +858,16 @@ func (a *App) handleMap(w http.ResponseWriter, r *http.Request, authCtx *AuthCon
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	points, err := a.store.ListMapPointsFiltered(r.Context(), 2000, filter)
+	limit := parsePositiveInt(r.URL.Query().Get("limit"), 10000)
+	if limit > 50000 {
+		limit = 50000
+	}
+	points, err := a.store.ListMapPointsFiltered(r.Context(), limit, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+	writeJSON(w, http.StatusOK, map[string]any{"points": points, "count": len(points), "limit": limit})
 }
 
 func (a *App) handleLocationGroups(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {

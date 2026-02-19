@@ -32,6 +32,7 @@ const mapStateSelect = document.querySelector('#mapStateSelect');
 const mapCitySelect = document.querySelector('#mapCitySelect');
 const mapFilterApplyBtn = document.querySelector('#mapFilterApplyBtn');
 const mapFilterResetBtn = document.querySelector('#mapFilterResetBtn');
+const mapPointsInfo = document.querySelector('#mapPointsInfo');
 
 const setupForm = document.querySelector('#setupForm');
 const loginForm = document.querySelector('#loginForm');
@@ -519,6 +520,7 @@ async function loadDashboardData() {
   renderFilterChip();
   renderMedia(items);
   renderMap(mapRes.points || []);
+  renderMapPointsInfo(mapRes);
   renderAudit(auditRes.items || []);
 }
 
@@ -901,6 +903,7 @@ function mapFilterAuxQuery(includeState) {
 function mapFilterQuery(prefix) {
   readMapFilterControls();
   const params = new URLSearchParams();
+  params.set('limit', '10000');
   if (mapFilter.albumID) params.set('album_id', mapFilter.albumID);
   if (mapFilter.state) params.set('state', mapFilter.state);
   if (mapFilter.city) params.set('city', mapFilter.city);
@@ -942,6 +945,15 @@ function mapTimeRange(timeframe) {
 async function loadMapData() {
   const mapRes = await api(`/api/map${mapFilterQuery('?')}`);
   renderMap(mapRes.points || []);
+  renderMapPointsInfo(mapRes);
+}
+
+function renderMapPointsInfo(mapRes) {
+  if (!mapPointsInfo) return;
+  const fallbackCount = Array.isArray(mapRes?.points) ? mapRes.points.length : 0;
+  const count = Number((mapRes?.count ?? fallbackCount) || 0);
+  const limit = Number(mapRes?.limit || 10000);
+  mapPointsInfo.textContent = `Pins: ${count.toLocaleString()} (limit ${limit.toLocaleString()})`;
 }
 
 function addSelectOption(select, value, label) {
