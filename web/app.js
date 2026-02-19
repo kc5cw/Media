@@ -200,26 +200,34 @@ function bindEvents() {
   });
 
   applyMediaFilterBtn?.addEventListener('click', async () => {
-    readMediaFilterControls();
-    if (mediaFilter.sort === 'distance' && (!mediaFilter.nearLat || !mediaFilter.nearLon)) {
-      statusChip.textContent = 'For region proximity sort, provide both Near lat and Near lon.';
-      return;
+    try {
+      readMediaFilterControls();
+      if (mediaFilter.sort === 'distance' && (!mediaFilter.nearLat || !mediaFilter.nearLon)) {
+        statusChip.textContent = 'For region proximity sort, provide both Near lat and Near lon.';
+        return;
+      }
+      await loadDashboardData();
+    } catch (err) {
+      statusChip.textContent = `Filter apply failed: ${err.message}`;
     }
-    await loadDashboardData();
   });
 
   resetMediaFilterBtn?.addEventListener('click', async () => {
-    mediaFilter.q = '';
-    mediaFilter.kind = '';
-    mediaFilter.gps = '';
-    mediaFilter.from = '';
-    mediaFilter.to = '';
-    mediaFilter.sort = 'capture_time';
-    mediaFilter.order = 'desc';
-    mediaFilter.nearLat = '';
-    mediaFilter.nearLon = '';
-    writeMediaFilterControls();
-    await loadDashboardData();
+    try {
+      mediaFilter.q = '';
+      mediaFilter.kind = '';
+      mediaFilter.gps = '';
+      mediaFilter.from = '';
+      mediaFilter.to = '';
+      mediaFilter.sort = 'capture_time';
+      mediaFilter.order = 'desc';
+      mediaFilter.nearLat = '';
+      mediaFilter.nearLon = '';
+      writeMediaFilterControls();
+      await loadDashboardData();
+    } catch (err) {
+      statusChip.textContent = `Filter reset failed: ${err.message}`;
+    }
   });
 
   textFilterInput?.addEventListener('keydown', async (event) => {
@@ -425,8 +433,14 @@ async function loadDashboardData() {
     api('/api/audit')
   ]);
 
+  let items = mediaRes.items || [];
+  // Defensive UI-side guard in case of stale/older server responses.
+  if (mediaFilter.kind === 'image' || mediaFilter.kind === 'video') {
+    items = items.filter((item) => String(item?.kind || '').toLowerCase() === mediaFilter.kind);
+  }
+
   renderFilterChip();
-  renderMedia(mediaRes.items || []);
+  renderMedia(items);
   renderMap(mapRes.points || []);
   renderAudit(auditRes.items || []);
 }
@@ -863,7 +877,7 @@ async function deleteSelectedMedia(ids) {
 
 function readMediaFilterControls() {
   mediaFilter.q = String(textFilterInput?.value || '').trim();
-  mediaFilter.kind = String(kindFilterSelect?.value || '').trim().toLowerCase();
+  mediaFilter.kind = normalizeKindValue(kindFilterSelect?.value || '');
   mediaFilter.gps = String(gpsFilterSelect?.value || '').trim().toLowerCase();
   mediaFilter.from = normalizeDateToStartISO(captureFromInput?.value || '');
   mediaFilter.to = normalizeDateToEndISO(captureToInput?.value || '');
@@ -883,6 +897,14 @@ function writeMediaFilterControls() {
   if (sortOrderSelect) sortOrderSelect.value = mediaFilter.order || 'desc';
   if (nearLatInput) nearLatInput.value = mediaFilter.nearLat || '';
   if (nearLonInput) nearLonInput.value = mediaFilter.nearLon || '';
+}
+
+function normalizeKindValue(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (!v) return '';
+  if (['image', 'images', 'img', 'photo', 'photos', 'jpg', 'jpeg'].includes(v)) return 'image';
+  if (['video', 'videos', 'vid', 'movie', 'movies', 'mp4', 'mov'].includes(v)) return 'video';
+  return '';
 }
 
 function normalizeDateToStartISO(raw) {

@@ -314,20 +314,33 @@ button.danger {
 }
 
 .media-filter-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(130px, 1fr)) minmax(170px, 1fr) minmax(120px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-bottom: 10px;
 }
 
 .media-filter-row input,
 .media-filter-row select {
+  flex: 1 1 160px;
+  min-width: 140px;
   margin-top: 0;
   padding: 9px 10px;
 }
 
 .media-filter-row button {
+  flex: 0 0 auto;
   align-self: center;
+  white-space: nowrap;
+}
+
+#textFilterInput {
+  flex: 2 1 260px;
+}
+
+#sortOrderSelect {
+  flex: 0 1 140px;
 }
 
 .library-mode-row {
@@ -639,6 +652,7 @@ button.active {
   }
 
   .media-filter-row {
+    display: grid;
     grid-template-columns: 1fr 1fr;
   }
 

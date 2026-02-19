@@ -1186,17 +1186,19 @@ func (a *App) getExcludedMounts(ctx context.Context) ([]string, error) {
 }
 
 func mediaFilterFromRequest(r *http.Request) (db.MediaFilter, error) {
+	kind, err := normalizeKindFilterValue(r.URL.Query().Get("kind"))
+	if err != nil {
+		return db.MediaFilter{}, err
+	}
+
 	filter := db.MediaFilter{
 		State:  strings.TrimSpace(r.URL.Query().Get("state")),
 		County: strings.TrimSpace(r.URL.Query().Get("county")),
 		City:   strings.TrimSpace(r.URL.Query().Get("city")),
 		Road:   strings.TrimSpace(r.URL.Query().Get("road")),
-		Kind:   strings.ToLower(strings.TrimSpace(r.URL.Query().Get("kind"))),
+		Kind:   kind,
 		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
 		HasGPS: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("gps"))),
-	}
-	if filter.Kind != "" && filter.Kind != "image" && filter.Kind != "video" {
-		return db.MediaFilter{}, errors.New("invalid kind filter")
 	}
 	if filter.HasGPS != "" && filter.HasGPS != "yes" && filter.HasGPS != "no" {
 		return db.MediaFilter{}, errors.New("invalid gps filter")
@@ -1244,6 +1246,20 @@ func mediaFilterFromRequest(r *http.Request) (db.MediaFilter, error) {
 		filter.HasNear = true
 	}
 	return filter, nil
+}
+
+func normalizeKindFilterValue(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case "":
+		return "", nil
+	case "image", "images", "img", "photo", "photos", "jpg", "jpeg":
+		return "image", nil
+	case "video", "videos", "vid", "movie", "movies", "mp4", "mov":
+		return "video", nil
+	default:
+		return "", errors.New("invalid kind filter")
+	}
 }
 
 func normalizeFilterTime(raw string, endOfDay bool) (string, error) {
