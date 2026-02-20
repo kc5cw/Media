@@ -60,6 +60,7 @@ const backupAPIToken = document.querySelector('#backupAPIToken');
 const backupStatus = document.querySelector('#backupStatus');
 const textFilterInput = document.querySelector('#textFilterInput');
 const kindFilterSelect = document.querySelector('#kindFilterSelect');
+const deviceFilterSelect = document.querySelector('#deviceFilterSelect');
 const gpsFilterSelect = document.querySelector('#gpsFilterSelect');
 const captureFromInput = document.querySelector('#captureFromInput');
 const captureToInput = document.querySelector('#captureToInput');
@@ -95,6 +96,7 @@ let albums = [];
 let activeAlbumID = 0;
 let mapStates = [];
 let mapCities = [];
+let deviceGroups = [];
 
 function leaflet() {
   // Leaflet's UMD build sets window.L (and window.leaflet). In ES modules, bare `L`
@@ -112,6 +114,9 @@ const locFilter = {
 const mediaFilter = {
   q: '',
   kind: '',
+  deviceMake: '',
+  deviceModel: '',
+  deviceUnset: false,
   gps: '',
   from: '',
   to: '',
@@ -246,6 +251,9 @@ function bindEvents() {
     try {
       mediaFilter.q = '';
       mediaFilter.kind = '';
+      mediaFilter.deviceMake = '';
+      mediaFilter.deviceModel = '';
+      mediaFilter.deviceUnset = false;
       mediaFilter.gps = '';
       mediaFilter.from = '';
       mediaFilter.to = '';
@@ -482,7 +490,7 @@ async function refreshAuthState() {
   renderViewModeState();
   startIngestPolling();
   await loadAlbums();
-  await loadMapFilterOptions();
+  await Promise.all([loadMapFilterOptions(), loadDeviceOptions()]);
   await loadDashboardData();
 }
 
@@ -498,7 +506,7 @@ async function loadDashboardData() {
     await loadAlbums();
     await loadAutoAlbumStates();
   }
-  await loadMapFilterOptions();
+  await Promise.all([loadMapFilterOptions(), loadDeviceOptions()]);
 
   const mediaSort = mediaFilter.sort || 'capture_time';
   const mediaOrder = mediaFilter.order || 'desc';
@@ -603,6 +611,12 @@ function renderFilterChip() {
   if (locFilter.city) parts.push(`City: ${locFilter.city}`);
   if (locFilter.road) parts.push(`Street: ${locFilter.road}`);
   if (mediaFilter.kind) parts.push(`Type: ${mediaFilter.kind}`);
+  if (mediaFilter.deviceUnset) {
+    parts.push('Device: unknown');
+  } else if (mediaFilter.deviceMake || mediaFilter.deviceModel) {
+    const label = `${mediaFilter.deviceMake || ''} ${mediaFilter.deviceModel || ''}`.trim();
+    if (label) parts.push(`Device: ${label}`);
+  }
   if (mediaFilter.gps === 'yes') parts.push('GPS: tagged');
   if (mediaFilter.gps === 'no') parts.push('GPS: none');
   if (mediaFilter.from) parts.push(`From: ${isoToDateValue(mediaFilter.from)}`);
@@ -800,6 +814,48 @@ function renderViewModeState() {
   removeSelectedFromAlbumBtn?.classList.toggle('hidden', !(albumsMode && activeAlbumID > 0));
 }
 
+async function loadDeviceOptions() {
+  if (!deviceFilterSelect) return;
+  const payload = await api('/api/device-groups');
+  deviceGroups = payload.items || [];
+  renderDeviceOptions();
+}
+
+function renderDeviceOptions() {
+  if (!deviceFilterSelect) return;
+
+  const selectedValue = mediaFilter.deviceUnset
+    ? '__unknown__'
+    : deviceOptionValue(mediaFilter.deviceMake, mediaFilter.deviceModel);
+
+  deviceFilterSelect.innerHTML = '';
+  addSelectOption(deviceFilterSelect, '', 'Device: all');
+  for (const g of deviceGroups) {
+    const isUnset = Boolean(g?.unset);
+    const value = isUnset ? '__unknown__' : deviceOptionValue(g?.make || '', g?.model || '');
+    const label = String(g?.label || (isUnset ? 'Unknown device' : '')).trim() || 'Unknown device';
+    const count = Number(g?.count || 0);
+    addSelectOption(deviceFilterSelect, value, `Device: ${label} (${count})`);
+  }
+
+  if (selectedValue && Array.from(deviceFilterSelect.options).some((opt) => opt.value === selectedValue)) {
+    deviceFilterSelect.value = selectedValue;
+    return;
+  }
+
+  mediaFilter.deviceMake = '';
+  mediaFilter.deviceModel = '';
+  mediaFilter.deviceUnset = false;
+  deviceFilterSelect.value = '';
+}
+
+function deviceOptionValue(make, model) {
+  return JSON.stringify({
+    make: String(make || '').trim(),
+    model: String(model || '').trim()
+  });
+}
+
 function readMapFilterControls() {
   mapFilter.timeframe = String(mapTimeframeSelect?.value || 'all').trim() || 'all';
   mapFilter.albumID = String(mapAlbumSelect?.value || '').trim();
@@ -973,6 +1029,12 @@ function filterQuery(prefix) {
   if (locFilter.road) params.set('road', locFilter.road);
   if (viewMode === 'albums' && activeAlbumID > 0) params.set('album_id', String(activeAlbumID));
   if (mediaFilter.kind) params.set('kind', mediaFilter.kind);
+  if (mediaFilter.deviceUnset) {
+    params.set('device_unknown', 'yes');
+  } else {
+    if (mediaFilter.deviceMake) params.set('device_make', mediaFilter.deviceMake);
+    if (mediaFilter.deviceModel) params.set('device_model', mediaFilter.deviceModel);
+  }
   if (mediaFilter.gps) params.set('gps', mediaFilter.gps);
   if (mediaFilter.q) params.set('q', mediaFilter.q);
   if (mediaFilter.from) params.set('from', mediaFilter.from);
@@ -1124,6 +1186,24 @@ async function deleteSelectedMedia(ids) {
 function readMediaFilterControls() {
   mediaFilter.q = String(textFilterInput?.value || '').trim();
   mediaFilter.kind = normalizeKindValue(kindFilterSelect?.value || '');
+  mediaFilter.deviceMake = '';
+  mediaFilter.deviceModel = '';
+  mediaFilter.deviceUnset = false;
+  const selectedDevice = String(deviceFilterSelect?.value || '').trim();
+  if (selectedDevice === '__unknown__') {
+    mediaFilter.deviceUnset = true;
+  } else if (selectedDevice) {
+    try {
+      const parsed = JSON.parse(selectedDevice);
+      mediaFilter.deviceMake = String(parsed?.make || '').trim();
+      mediaFilter.deviceModel = String(parsed?.model || '').trim();
+    } catch {
+      // Keep as "all devices" when selected option payload is invalid.
+      mediaFilter.deviceMake = '';
+      mediaFilter.deviceModel = '';
+      mediaFilter.deviceUnset = false;
+    }
+  }
   mediaFilter.gps = String(gpsFilterSelect?.value || '').trim().toLowerCase();
   mediaFilter.from = normalizeDateToStartISO(captureFromInput?.value || '');
   mediaFilter.to = normalizeDateToEndISO(captureToInput?.value || '');
@@ -1136,6 +1216,15 @@ function readMediaFilterControls() {
 function writeMediaFilterControls() {
   if (textFilterInput) textFilterInput.value = mediaFilter.q || '';
   if (kindFilterSelect) kindFilterSelect.value = mediaFilter.kind || '';
+  if (deviceFilterSelect) {
+    if (mediaFilter.deviceUnset) {
+      deviceFilterSelect.value = '__unknown__';
+    } else if (mediaFilter.deviceMake || mediaFilter.deviceModel) {
+      deviceFilterSelect.value = deviceOptionValue(mediaFilter.deviceMake, mediaFilter.deviceModel);
+    } else {
+      deviceFilterSelect.value = '';
+    }
+  }
   if (gpsFilterSelect) gpsFilterSelect.value = mediaFilter.gps || '';
   if (captureFromInput) captureFromInput.value = isoToDateValue(mediaFilter.from);
   if (captureToInput) captureToInput.value = isoToDateValue(mediaFilter.to);

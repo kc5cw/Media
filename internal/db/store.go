@@ -113,6 +113,9 @@ type MediaFilter struct {
 	NearLat     float64
 	NearLon     float64
 	HasNear     bool
+	DeviceMake  string
+	DeviceModel string
+	DeviceUnset bool
 }
 
 type Album struct {
@@ -130,6 +133,14 @@ type LocationGroup struct {
 	MinLon sql.NullFloat64 `json:"min_lon"`
 	MaxLat sql.NullFloat64 `json:"max_lat"`
 	MaxLon sql.NullFloat64 `json:"max_lon"`
+}
+
+type DeviceGroup struct {
+	Make  string `json:"make"`
+	Model string `json:"model"`
+	Label string `json:"label"`
+	Count int64  `json:"count"`
+	Unset bool   `json:"unset"`
 }
 
 type GeoTodo struct {
@@ -1005,6 +1016,53 @@ func (s *Store) ListLocationGroups(ctx context.Context, level string, filter Med
 	return out, rows.Err()
 }
 
+func (s *Store) ListDeviceGroups(ctx context.Context, filter MediaFilter, limit int) ([]DeviceGroup, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	where, args := buildLocationWhere(filter)
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(NULLIF(TRIM(make), ''), '') AS make_norm,
+			COALESCE(NULLIF(TRIM(model), ''), '') AS model_norm,
+			COUNT(1) AS count
+		FROM media_files
+		WHERE %s
+		GROUP BY make_norm, model_norm
+		ORDER BY count DESC, make_norm ASC, model_norm ASC
+		LIMIT ?
+	`, where)
+
+	args = append(args, limit)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]DeviceGroup, 0)
+	for rows.Next() {
+		var g DeviceGroup
+		if err := rows.Scan(&g.Make, &g.Model, &g.Count); err != nil {
+			return nil, err
+		}
+		g.Unset = strings.TrimSpace(g.Make) == "" && strings.TrimSpace(g.Model) == ""
+		switch {
+		case g.Unset:
+			g.Label = "Unknown device"
+		case strings.TrimSpace(g.Make) == "":
+			g.Label = strings.TrimSpace(g.Model)
+		case strings.TrimSpace(g.Model) == "":
+			g.Label = strings.TrimSpace(g.Make)
+		default:
+			g.Label = strings.TrimSpace(g.Make) + " " + strings.TrimSpace(g.Model)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ListGeoTodos(ctx context.Context, limit int) ([]GeoTodo, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
@@ -1268,6 +1326,18 @@ func buildLocationWhere(filter MediaFilter) (string, []any) {
 	}
 	if filter.HasNear {
 		clauses = append(clauses, "gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
+	}
+	if filter.DeviceUnset {
+		clauses = append(clauses, "TRIM(COALESCE(make, '')) = '' AND TRIM(COALESCE(model, '')) = ''")
+	} else {
+		if strings.TrimSpace(filter.DeviceMake) != "" {
+			clauses = append(clauses, "TRIM(COALESCE(make, '')) = ?")
+			args = append(args, strings.TrimSpace(filter.DeviceMake))
+		}
+		if strings.TrimSpace(filter.DeviceModel) != "" {
+			clauses = append(clauses, "TRIM(COALESCE(model, '')) = ?")
+			args = append(args, strings.TrimSpace(filter.DeviceModel))
+		}
 	}
 
 	return strings.Join(clauses, " AND "), args

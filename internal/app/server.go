@@ -187,6 +187,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/albums/{id}/add", a.withAuth(a.handleAlbumAdd))
 	mux.HandleFunc("POST /api/albums/{id}/remove", a.withAuth(a.handleAlbumRemove))
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
+	mux.HandleFunc("GET /api/device-groups", a.withAuth(a.handleDeviceGroups))
 	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
 	mux.HandleFunc("GET /api/audit", a.withAuth(a.handleAudit))
 	mux.HandleFunc("POST /api/backup", a.withAuth(a.handleBackupStart))
@@ -870,6 +871,26 @@ func (a *App) handleMap(w http.ResponseWriter, r *http.Request, authCtx *AuthCon
 	writeJSON(w, http.StatusOK, map[string]any{"points": points, "count": len(points), "limit": limit})
 }
 
+func (a *App) handleDeviceGroups(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	_ = authCtx
+	filter, err := mediaFilterFromRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Device options should reflect the broader current set, not the current device selection.
+	filter.DeviceMake = ""
+	filter.DeviceModel = ""
+	filter.DeviceUnset = false
+
+	groups, err := a.store.ListDeviceGroups(r.Context(), filter, 500)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": groups})
+}
+
 func (a *App) handleLocationGroups(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
 	level := r.URL.Query().Get("level")
@@ -1314,6 +1335,22 @@ func mediaFilterFromRequest(r *http.Request) (db.MediaFilter, error) {
 		}
 		filter.AlbumID = albumID
 	}
+
+	deviceMake := strings.TrimSpace(r.URL.Query().Get("device_make"))
+	deviceModel := strings.TrimSpace(r.URL.Query().Get("device_model"))
+	deviceUnknownRaw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("device_unknown")))
+	if deviceUnknownRaw != "" {
+		if deviceUnknownRaw != "yes" && deviceUnknownRaw != "no" {
+			return db.MediaFilter{}, errors.New("invalid device_unknown filter")
+		}
+		filter.DeviceUnset = deviceUnknownRaw == "yes"
+	}
+	if filter.DeviceUnset {
+		deviceMake = ""
+		deviceModel = ""
+	}
+	filter.DeviceMake = deviceMake
+	filter.DeviceModel = deviceModel
 
 	from, err := normalizeFilterTime(r.URL.Query().Get("from"), false)
 	if err != nil {
