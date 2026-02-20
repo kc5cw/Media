@@ -920,8 +920,11 @@ func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error
 }
 
 func (s *Store) ListMapPointsFiltered(ctx context.Context, limit int, filter MediaFilter) ([]MapPoint, error) {
-	if limit <= 0 || limit > 5000 {
-		limit = 1000
+	if limit <= 0 {
+		limit = 10000
+	}
+	if limit > 50000 {
+		limit = 50000
 	}
 
 	where, args := buildLocationWhere(filter)
