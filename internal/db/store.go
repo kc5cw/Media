@@ -1282,7 +1282,7 @@ func buildLocationWhere(filter MediaFilter) (string, []any) {
 			clauses = append(clauses, fmt.Sprintf("(%s IS NULL OR TRIM(%s) = '')", col, col))
 			return
 		}
-		clauses = append(clauses, fmt.Sprintf("%s = ?", col))
+		clauses = append(clauses, fmt.Sprintf("LOWER(TRIM(COALESCE(%s, ''))) = LOWER(TRIM(?))", col))
 		args = append(args, value)
 	}
 

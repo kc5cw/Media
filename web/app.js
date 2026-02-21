@@ -247,6 +247,15 @@ function bindEvents() {
     }
   });
 
+  kindFilterSelect?.addEventListener('change', async () => {
+    try {
+      readMediaFilterControls();
+      await loadDashboardData();
+    } catch (err) {
+      statusChip.textContent = `Type filter failed: ${err.message}`;
+    }
+  });
+
   resetMediaFilterBtn?.addEventListener('click', async () => {
     try {
       mediaFilter.q = '';
@@ -522,7 +531,7 @@ async function loadDashboardData() {
   let items = mediaRes.items || [];
   // Defensive UI-side guard in case of stale/older server responses.
   if (mediaFilter.kind === 'image' || mediaFilter.kind === 'video') {
-    items = items.filter((item) => String(item?.kind || '').toLowerCase() === mediaFilter.kind);
+    items = items.filter((item) => mediaMatchesKindFilter(item, mediaFilter.kind));
   }
 
   renderFilterChip();
@@ -534,27 +543,49 @@ async function loadDashboardData() {
 
 async function loadPlaces() {
   const stateRes = await api('/api/location-groups?level=state');
-  renderPlaceList(placesState, stateRes.groups || [], 'state');
-
-  if (locFilter.state) {
-    const countyRes = await api(`/api/location-groups?level=county&state=${encodeURIComponent(locFilter.state)}`);
-    renderPlaceList(placesCounty, countyRes.groups || [], 'county');
-  } else {
-    placesCounty.innerHTML = '<div class="muted">Select a state</div>';
+  const states = stateRes.groups || [];
+  renderPlaceList(placesState, states, 'state');
+  if (locFilter.state && !states.some((g) => String(g?.name || '').toLowerCase() === String(locFilter.state).toLowerCase())) {
+    locFilter.state = '';
+    locFilter.county = '';
+    locFilter.city = '';
+    locFilter.road = '';
   }
 
-  if (locFilter.state && locFilter.county) {
-    const cityRes = await api(`/api/location-groups?level=city&state=${encodeURIComponent(locFilter.state)}&county=${encodeURIComponent(locFilter.county)}`);
-    renderPlaceList(placesCity, cityRes.groups || [], 'city');
-  } else {
-    placesCity.innerHTML = '<div class="muted">Select a county</div>';
+  const countyParams = new URLSearchParams();
+  countyParams.set('level', 'county');
+  if (locFilter.state) countyParams.set('state', locFilter.state);
+  const countyRes = await api(`/api/location-groups?${countyParams.toString()}`);
+  const counties = countyRes.groups || [];
+  renderPlaceList(placesCounty, counties, 'county');
+  if (locFilter.county && !counties.some((g) => String(g?.name || '').toLowerCase() === String(locFilter.county).toLowerCase())) {
+    locFilter.county = '';
+    locFilter.city = '';
+    locFilter.road = '';
   }
 
-  if (locFilter.state && locFilter.county && locFilter.city) {
-    const roadRes = await api(`/api/location-groups?level=road&state=${encodeURIComponent(locFilter.state)}&county=${encodeURIComponent(locFilter.county)}&city=${encodeURIComponent(locFilter.city)}`);
-    renderPlaceList(placesRoad, roadRes.groups || [], 'road');
-  } else {
-    placesRoad.innerHTML = '<div class="muted">Select a city</div>';
+  const cityParams = new URLSearchParams();
+  cityParams.set('level', 'city');
+  if (locFilter.state) cityParams.set('state', locFilter.state);
+  if (locFilter.county) cityParams.set('county', locFilter.county);
+  const cityRes = await api(`/api/location-groups?${cityParams.toString()}`);
+  const cities = cityRes.groups || [];
+  renderPlaceList(placesCity, cities, 'city');
+  if (locFilter.city && !cities.some((g) => String(g?.name || '').toLowerCase() === String(locFilter.city).toLowerCase())) {
+    locFilter.city = '';
+    locFilter.road = '';
+  }
+
+  const roadParams = new URLSearchParams();
+  roadParams.set('level', 'road');
+  if (locFilter.state) roadParams.set('state', locFilter.state);
+  if (locFilter.county) roadParams.set('county', locFilter.county);
+  if (locFilter.city) roadParams.set('city', locFilter.city);
+  const roadRes = await api(`/api/location-groups?${roadParams.toString()}`);
+  const roads = roadRes.groups || [];
+  renderPlaceList(placesRoad, roads, 'road');
+  if (locFilter.road && !roads.some((g) => String(g?.name || '').toLowerCase() === String(locFilter.road).toLowerCase())) {
+    locFilter.road = '';
   }
 
   renderCrumb();
@@ -1240,6 +1271,30 @@ function normalizeKindValue(raw) {
   if (['image', 'images', 'img', 'photo', 'photos', 'jpg', 'jpeg'].includes(v)) return 'image';
   if (['video', 'videos', 'vid', 'movie', 'movies', 'mp4', 'mov'].includes(v)) return 'video';
   return '';
+}
+
+function mediaMatchesKindFilter(item, wantedKind) {
+  const wanted = normalizeKindValue(wantedKind);
+  if (!wanted) return true;
+
+  const itemKind = normalizeKindValue(item?.kind || '');
+  if (itemKind) return itemKind === wanted;
+
+  const ext = String(item?.extension || '').trim().replace(/^\./, '').toLowerCase();
+  if (ext) {
+    const extKind = normalizeKindValue(ext);
+    if (extKind) return extKind === wanted;
+  }
+
+  const file = String(item?.file_name || '').trim().toLowerCase();
+  const dot = file.lastIndexOf('.');
+  if (dot > -1) {
+    const nameExt = file.slice(dot + 1);
+    const nameKind = normalizeKindValue(nameExt);
+    if (nameKind) return nameKind === wanted;
+  }
+
+  return false;
 }
 
 function normalizeDateToStartISO(raw) {
