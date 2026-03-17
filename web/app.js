@@ -1717,7 +1717,7 @@ function renderIngestStatus(st) {
 
     const fps = Number(st.files_per_sec || 0);
     const mbps = Number(st.mbps || 0);
-    sub = `${done}/${total} files | ${fps.toFixed(1)} files/s | ${formatMBps(mbps)} MB/s`;
+    sub = `${done}/${total} files | ${formatFileRate(fps)} | ${formatMBps(mbps)} MB/s`;
   } else if (state === 'error') {
     title = 'Error';
     label = '!';
@@ -1799,4 +1799,13 @@ function formatMBps(value) {
   if (n >= 100) return n.toFixed(0);
   if (n >= 10) return n.toFixed(1);
   return n.toFixed(2);
+}
+
+function formatFileRate(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0.00 files/s';
+  if (n >= 10) return `${n.toFixed(1)} files/s`;
+  if (n >= 1) return `${n.toFixed(2)} files/s`;
+  if (n >= 0.1) return `${n.toFixed(3)} files/s`;
+  return `${(n * 60).toFixed(2)} files/min`;
 }
