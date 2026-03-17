@@ -43,8 +43,6 @@ html, body {
 }
 
 .shell {
-  position: relative;
-  z-index: 1;
   max-width: 1240px;
   margin: 0 auto;
   padding: 28px;
@@ -56,7 +54,11 @@ html, body {
   gap: 20px;
   align-items: start;
   margin-bottom: 20px;
-  isolation: isolate;
+  background: #121b2c;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 16px 32px rgba(2, 9, 20, 0.22);
 }
 
 .topbar > :first-child {
@@ -75,14 +77,13 @@ html, body {
   display: flex;
   gap: 12px;
   align-items: center;
-  background: linear-gradient(180deg, rgba(33, 48, 77, 0.96), rgba(24, 35, 58, 0.96));
+  background: #1a2740;
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 10px 12px;
   min-width: 360px;
   min-height: 72px;
-  contain: layout paint style;
-  box-shadow: 0 12px 24px rgba(2, 9, 20, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(145, 176, 220, 0.06);
 }
 
 .ring {
@@ -92,14 +93,12 @@ html, body {
   border-radius: 999px;
   display: grid;
   place-items: center;
-  position: relative;
   border: 4px solid rgba(145, 176, 220, 0.24);
-  background: rgba(7, 12, 22, 0.96);
+  background: #0f1728;
   flex: 0 0 auto;
 }
 
 .ring-inner {
-  position: relative;
   font-size: 0.78rem;
   color: var(--text);
   font-weight: 800;
@@ -160,7 +159,7 @@ html, body {
 }
 
 .status {
-  background: rgba(24, 35, 58, 0.96);
+  background: #16233a;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 8px 14px;
@@ -169,7 +168,6 @@ html, body {
   display: flex;
   align-items: center;
   font-variant-numeric: tabular-nums;
-  contain: paint;
 }
 
 .card {
