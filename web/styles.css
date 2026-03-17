@@ -49,28 +49,24 @@ html, body {
 }
 
 .topbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 20px;
-  align-items: start;
   margin-bottom: 20px;
-  background: #121b2c;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 20px;
-  box-shadow: 0 16px 32px rgba(2, 9, 20, 0.22);
+  padding-top: 8px;
 }
 
 .topbar > :first-child {
   min-width: 0;
 }
 
-.top-status {
+.status-board-actions {
   display: flex;
   gap: 12px;
   align-items: flex-start;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.status-board .cardhead {
+  align-items: center;
 }
 
 .ingest-widget {
@@ -688,12 +684,17 @@ button.active {
   }
 
   .topbar {
-    grid-template-columns: 1fr;
+    padding-top: 0;
   }
 
   .ingest-widget {
     min-width: 0;
     width: 100%;
+  }
+
+  .status-board-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .layout {
