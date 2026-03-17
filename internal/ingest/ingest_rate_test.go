@@ -60,6 +60,7 @@ func TestProcessMountReportsLiveMBps(t *testing.T) {
 	}()
 
 	maxMBps := 0.0
+	maxFilesPerSec := 0.0
 	timeout := time.After(60 * time.Second)
 	for {
 		select {
@@ -73,6 +74,9 @@ func TestProcessMountReportsLiveMBps(t *testing.T) {
 			if maxMBps <= 0 {
 				t.Fatalf("expected MB/s to become > 0 during ingest, got %.4f", maxMBps)
 			}
+			if maxFilesPerSec <= 0 {
+				t.Fatalf("expected files/s to become > 0 during ingest, got %.4f", maxFilesPerSec)
+			}
 			return
 		case <-timeout:
 			t.Fatalf("timed out waiting for ingest completion")
@@ -80,6 +84,9 @@ func TestProcessMountReportsLiveMBps(t *testing.T) {
 			st := manager.GetStatus()
 			if st.MBps > maxMBps {
 				maxMBps = st.MBps
+			}
+			if st.FilesPerSec > maxFilesPerSec {
+				maxFilesPerSec = st.FilesPerSec
 			}
 			time.Sleep(25 * time.Millisecond)
 		}

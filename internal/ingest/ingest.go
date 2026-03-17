@@ -47,6 +47,7 @@ type Manager struct {
 type rateSample struct {
 	At    time.Time
 	Bytes int64
+	Files float64
 }
 
 type Result struct {
@@ -94,18 +95,11 @@ func (m *Manager) GetStatus() Status {
 	defer m.statusMu.Unlock()
 
 	st := m.status
-	// Derive rates and percent.
-	if st.StartedAt != "" {
-		if started, err := time.Parse(time.RFC3339Nano, st.StartedAt); err == nil {
-			elapsed := time.Since(started).Seconds()
-			if elapsed > 0 {
-				st.FilesPerSec = float64(st.ProcessedFiles) / elapsed
-			}
-		}
-	}
 	if st.State == "ingesting" {
+		st.FilesPerSec = m.currentFilesPerSec()
 		st.MBps = m.currentMBps()
 	} else {
+		st.FilesPerSec = 0
 		st.MBps = 0
 	}
 	if st.TotalFiles > 0 {
@@ -470,7 +464,7 @@ func (m *Manager) addCopiedBytes(delta int64) {
 		st.UpdatedAt = now
 	})
 	if delta > 0 {
-		m.recordRateSample(delta)
+		m.recordRateSample(delta, 0)
 	}
 }
 
@@ -480,8 +474,8 @@ func (m *Manager) resetRateSamples() {
 	m.rateSamples = nil
 }
 
-func (m *Manager) recordRateSample(bytes int64) {
-	if bytes <= 0 {
+func (m *Manager) recordRateSample(bytes int64, files float64) {
+	if bytes <= 0 && files <= 0 {
 		return
 	}
 
@@ -491,7 +485,7 @@ func (m *Manager) recordRateSample(bytes int64) {
 	m.rateMu.Lock()
 	defer m.rateMu.Unlock()
 
-	m.rateSamples = append(m.rateSamples, rateSample{At: now, Bytes: bytes})
+	m.rateSamples = append(m.rateSamples, rateSample{At: now, Bytes: bytes, Files: files})
 	trim := 0
 	for trim < len(m.rateSamples) && m.rateSamples[trim].At.Before(cutoff) {
 		trim++
@@ -539,6 +533,44 @@ func (m *Manager) currentMBps() float64 {
 	return (float64(bytes) / elapsed) / (1024.0 * 1024.0)
 }
 
+func (m *Manager) currentFilesPerSec() float64 {
+	now := time.Now()
+	recentCutoff := now.Add(-3 * time.Second)
+	keepCutoff := now.Add(-10 * time.Second)
+
+	m.rateMu.Lock()
+	defer m.rateMu.Unlock()
+
+	trim := 0
+	for trim < len(m.rateSamples) && m.rateSamples[trim].At.Before(keepCutoff) {
+		trim++
+	}
+	if trim > 0 {
+		m.rateSamples = append([]rateSample(nil), m.rateSamples[trim:]...)
+	}
+
+	var files float64
+	var first time.Time
+	for _, sample := range m.rateSamples {
+		if sample.At.Before(recentCutoff) {
+			continue
+		}
+		if first.IsZero() {
+			first = sample.At
+		}
+		files += sample.Files
+	}
+	if files <= 0 {
+		return 0
+	}
+
+	elapsed := now.Sub(first).Seconds()
+	if elapsed <= 0 {
+		elapsed = 0.001
+	}
+	return files / elapsed
+}
+
 func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout, srcPath, kind, actor string, result *Result) error {
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -549,7 +581,7 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	}
 
 	crcHex, shaHex, err := media.ComputeHashesWithProgress(srcPath, func(n int64) {
-		m.recordRateSample(n)
+		m.recordRateSample(n, 0)
 	})
 	if err != nil {
 		return err
@@ -567,6 +599,7 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	}
 	if exists {
 		result.Duplicates++
+		m.recordRateSample(0, 1)
 		_ = m.audit.Log(ctx, actor, "duplicate_skipped", map[string]any{
 			"source_path":  srcPath,
 			"crc32":        crcHex,
@@ -615,10 +648,15 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	if err != nil {
 		return err
 	}
+	fileSize := info.Size()
+	if fileSize <= 0 {
+		fileSize = 1
+	}
 	var copiedThisFile int64
 	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime(), func(n int64) {
 		copiedThisFile += n
 		m.addCopiedBytes(n)
+		m.recordRateSample(0, float64(n)/float64(fileSize))
 	}); err != nil {
 		if copiedThisFile > 0 {
 			m.addCopiedBytes(-copiedThisFile)
