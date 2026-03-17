@@ -15,6 +15,7 @@ const ingestRing = document.querySelector('#ingestRing');
 const ingestRingLabel = document.querySelector('#ingestRingLabel');
 const ingestTitle = document.querySelector('#ingestTitle');
 const ingestSub = document.querySelector('#ingestSub');
+const ingestProgressFill = document.querySelector('#ingestProgressFill');
 const pauseImportBtn = document.querySelector('#pauseImportBtn');
 
 const placesState = document.querySelector('#placesState');
@@ -92,6 +93,14 @@ let ingestStatusRequest = null;
 let backupStatusRequest = null;
 let latestIngestUpdatedAt = '';
 let latestIngestStatus = null;
+let lastRenderedIngest = {
+  ringProgress: '',
+  barProgress: '',
+  label: '',
+  title: '',
+  sub: '',
+  tooltip: ''
+};
 let mountPolicy = { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
 let mediaItems = [];
 let selectedIDs = new Set();
@@ -1643,6 +1652,14 @@ function stopIngestPolling() {
   backupStatusRequest = null;
   latestIngestUpdatedAt = '';
   latestIngestStatus = null;
+  lastRenderedIngest = {
+    ringProgress: '',
+    barProgress: '',
+    label: '',
+    title: '',
+    sub: '',
+    tooltip: ''
+  };
   renderPauseButton(null);
 }
 
@@ -1713,13 +1730,33 @@ function renderIngestStatus(st) {
     }
   }
 
-  if (ingestRing) ingestRing.style.setProperty('--p', Math.max(0, Math.min(100, p)));
-  if (ingestRingLabel) ingestRingLabel.textContent = label;
-  if (ingestTitle) ingestTitle.textContent = title;
-  if (ingestSub) ingestSub.textContent = sub;
+  const normalizedProgress = String(Math.max(0, Math.min(100, p)));
+  const tooltip = String(st.current_path || '');
 
-  // Tooltip with current file path if available.
-  if (ingestWidget) ingestWidget.title = st.current_path || '';
+  if (ingestRing && lastRenderedIngest.ringProgress !== normalizedProgress) {
+    ingestRing.style.setProperty('--p', normalizedProgress);
+    lastRenderedIngest.ringProgress = normalizedProgress;
+  }
+  if (ingestProgressFill && lastRenderedIngest.barProgress !== normalizedProgress) {
+    ingestProgressFill.style.width = `${normalizedProgress}%`;
+    lastRenderedIngest.barProgress = normalizedProgress;
+  }
+  if (ingestRingLabel && lastRenderedIngest.label !== label) {
+    ingestRingLabel.textContent = label;
+    lastRenderedIngest.label = label;
+  }
+  if (ingestTitle && lastRenderedIngest.title !== title) {
+    ingestTitle.textContent = title;
+    lastRenderedIngest.title = title;
+  }
+  if (ingestSub && lastRenderedIngest.sub !== sub) {
+    ingestSub.textContent = sub;
+    lastRenderedIngest.sub = sub;
+  }
+  if (ingestWidget && lastRenderedIngest.tooltip !== tooltip) {
+    ingestWidget.title = tooltip;
+    lastRenderedIngest.tooltip = tooltip;
+  }
   renderPauseButton(st);
 }
 

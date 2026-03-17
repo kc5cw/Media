@@ -23,11 +23,7 @@ html, body {
 }
 
 .bg-shape {
-  position: fixed;
-  filter: blur(80px);
-  border-radius: 999px;
-  z-index: 0;
-  opacity: 0.45;
+  display: none;
 }
 
 .shape-a {
@@ -60,6 +56,7 @@ html, body {
   gap: 20px;
   align-items: start;
   margin-bottom: 20px;
+  isolation: isolate;
 }
 
 .topbar > :first-child {
@@ -78,43 +75,35 @@ html, body {
   display: flex;
   gap: 12px;
   align-items: center;
-  background: rgba(34, 52, 84, 0.55);
+  background: linear-gradient(180deg, rgba(33, 48, 77, 0.96), rgba(24, 35, 58, 0.96));
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 10px 12px;
   min-width: 360px;
   min-height: 72px;
+  contain: layout paint style;
+  box-shadow: 0 12px 24px rgba(2, 9, 20, 0.22);
 }
 
 .ring {
   --size: 48px;
-  --track: rgba(158, 178, 205, 0.22);
-  --fill: rgba(61, 208, 255, 0.95);
   width: var(--size);
   height: var(--size);
   border-radius: 999px;
-  background: conic-gradient(var(--fill) calc(var(--p) * 1%), var(--track) 0);
   display: grid;
   place-items: center;
   position: relative;
-  box-shadow: 0 12px 24px rgba(2, 9, 20, 0.35);
-}
-
-.ring::after {
-  content: "";
-  position: absolute;
-  inset: 4px;
-  border-radius: 999px;
-  background: rgba(7, 12, 22, 0.92);
-  border: 1px solid rgba(145, 176, 220, 0.16);
+  border: 4px solid rgba(145, 176, 220, 0.24);
+  background: rgba(7, 12, 22, 0.96);
+  flex: 0 0 auto;
 }
 
 .ring-inner {
   position: relative;
-  z-index: 1;
   font-size: 0.78rem;
   color: var(--text);
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .ingest-meta {
@@ -142,6 +131,23 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+.ingest-progress {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(145, 176, 220, 0.18);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.ingest-progress-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 180ms linear;
+}
+
 .topbar h1 {
   margin: 0;
   font-size: clamp(1.8rem, 5vw, 2.6rem);
@@ -154,7 +160,7 @@ html, body {
 }
 
 .status {
-  background: rgba(34, 52, 84, 0.8);
+  background: rgba(24, 35, 58, 0.96);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 8px 14px;
@@ -163,16 +169,16 @@ html, body {
   display: flex;
   align-items: center;
   font-variant-numeric: tabular-nums;
+  contain: paint;
 }
 
 .card {
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(14, 21, 35, 0.96), rgba(12, 18, 31, 0.96));
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   border-radius: 18px;
   padding: 20px;
   margin-bottom: 18px;
-  backdrop-filter: blur(10px);
 }
 
 .cardhead {
