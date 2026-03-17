@@ -171,6 +171,8 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/status", a.handleStatus)
 	mux.HandleFunc("GET /api/ingest-status", a.withAuth(a.handleIngestStatus))
+	mux.HandleFunc("POST /api/ingest/pause", a.withAuth(a.handleIngestPause))
+	mux.HandleFunc("POST /api/ingest/resume", a.withAuth(a.handleIngestResume))
 	mux.HandleFunc("GET /api/backup-status", a.withAuth(a.handleBackupStatus))
 	mux.HandleFunc("POST /api/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/login", a.handleLogin)
@@ -239,6 +241,28 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleIngestStatus(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
 	writeJSON(w, http.StatusOK, a.ingestor.GetStatus())
+}
+
+func (a *App) handleIngestPause(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	changed := a.ingestor.Pause()
+	st := a.ingestor.GetStatus()
+	_ = a.audit.Log(r.Context(), authCtx.Username, "ingest_pause_requested", map[string]any{
+		"changed": changed,
+		"state":   st.State,
+		"mount":   st.Mount,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": changed, "status": st})
+}
+
+func (a *App) handleIngestResume(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	changed := a.ingestor.Resume()
+	st := a.ingestor.GetStatus()
+	_ = a.audit.Log(r.Context(), authCtx.Username, "ingest_resume_requested", map[string]any{
+		"changed": changed,
+		"state":   st.State,
+		"mount":   st.Mount,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": changed, "status": st})
 }
 
 func (a *App) handleBackupStatus(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {

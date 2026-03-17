@@ -40,6 +40,9 @@ type Manager struct {
 	statusMu sync.Mutex
 	status   Status
 
+	pauseMu sync.Mutex
+	paused  bool
+
 	rateMu      sync.Mutex
 	rateSamples []rateSample
 }
@@ -59,6 +62,7 @@ type Result struct {
 
 type Status struct {
 	State          string  `json:"state"` // idle, scanning, ingesting, error
+	Paused         bool    `json:"paused"`
 	Mount          string  `json:"mount"`
 	Phase          string  `json:"phase"` // scan, ingest
 	StartedAt      string  `json:"started_at"`
@@ -91,10 +95,13 @@ func NewManager(store *db.Store, auditLogger *audit.Logger, geocoder *geocode.Re
 }
 
 func (m *Manager) GetStatus() Status {
-	m.statusMu.Lock()
-	defer m.statusMu.Unlock()
+	paused := m.IsPaused()
 
+	m.statusMu.Lock()
 	st := m.status
+	m.statusMu.Unlock()
+
+	st.Paused = paused
 	if st.State == "ingesting" {
 		st.FilesPerSec = m.currentFilesPerSec()
 		st.MBps = m.currentMBps()
@@ -109,6 +116,57 @@ func (m *Manager) GetStatus() Status {
 		}
 	}
 	return st
+}
+
+func (m *Manager) Pause() bool {
+	m.statusMu.Lock()
+	active := m.status.State == "scanning" || m.status.State == "ingesting"
+	m.statusMu.Unlock()
+	if !active {
+		return false
+	}
+
+	m.pauseMu.Lock()
+	defer m.pauseMu.Unlock()
+
+	if m.paused {
+		return false
+	}
+	m.paused = true
+	m.bumpStatus(func(st *Status) {
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		if st.State == "scanning" {
+			st.Message = "Scan paused"
+		} else if st.State == "ingesting" {
+			st.Message = "Import paused"
+		}
+	})
+	return true
+}
+
+func (m *Manager) Resume() bool {
+	m.pauseMu.Lock()
+	defer m.pauseMu.Unlock()
+
+	if !m.paused {
+		return false
+	}
+	m.paused = false
+	m.bumpStatus(func(st *Status) {
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		if st.State == "scanning" {
+			st.Message = "Scanning for media..."
+		} else if st.State == "ingesting" {
+			st.Message = "Ingesting media..."
+		}
+	})
+	return true
+}
+
+func (m *Manager) IsPaused() bool {
+	m.pauseMu.Lock()
+	defer m.pauseMu.Unlock()
+	return m.paused
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -197,6 +255,9 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 	var totalFiles int
 	var totalBytes int64
 	scanErr := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := m.waitIfPaused(ctx); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			result.Errors++
 			return nil
@@ -249,6 +310,9 @@ func (m *Manager) ProcessMount(ctx context.Context, mountPath, actor string) (Re
 
 	// Second pass: ingest.
 	walkErr := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := m.waitIfPaused(ctx); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			result.Errors++
 			return nil
@@ -386,6 +450,9 @@ func (m *Manager) ProcessUploadedFiles(ctx context.Context, actor string, srcPat
 	})
 
 	for _, it := range items {
+		if err := m.waitIfPaused(ctx); err != nil {
+			return result, err
+		}
 		m.bumpStatus(func(st *Status) {
 			st.CurrentPath = it.path
 			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -571,6 +638,19 @@ func (m *Manager) currentFilesPerSec() float64 {
 	return files / elapsed
 }
 
+func (m *Manager) waitIfPaused(ctx context.Context) error {
+	for {
+		if !m.IsPaused() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(120 * time.Millisecond):
+		}
+	}
+}
+
 func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout, srcPath, kind, actor string, result *Result) error {
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -581,6 +661,7 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	}
 
 	crcHex, shaHex, err := media.ComputeHashesWithProgress(srcPath, func(n int64) {
+		_ = m.waitIfPaused(ctx)
 		m.recordRateSample(n, 0)
 	})
 	if err != nil {
@@ -654,6 +735,7 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	}
 	var copiedThisFile int64
 	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime(), func(n int64) {
+		_ = m.waitIfPaused(ctx)
 		copiedThisFile += n
 		m.addCopiedBytes(n)
 		m.recordRateSample(0, float64(n)/float64(fileSize))

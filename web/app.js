@@ -15,6 +15,7 @@ const ingestRing = document.querySelector('#ingestRing');
 const ingestRingLabel = document.querySelector('#ingestRingLabel');
 const ingestTitle = document.querySelector('#ingestTitle');
 const ingestSub = document.querySelector('#ingestSub');
+const pauseImportBtn = document.querySelector('#pauseImportBtn');
 
 const placesState = document.querySelector('#placesState');
 const placesCounty = document.querySelector('#placesCounty');
@@ -87,6 +88,10 @@ let mapFull;
 let mapFullLayer;
 let lastPoints = [];
 let ingestPoller;
+let ingestStatusRequest = null;
+let backupStatusRequest = null;
+let latestIngestUpdatedAt = '';
+let latestIngestStatus = null;
 let mountPolicy = { mounts: [], excluded_mounts: [], auto_excluded_mounts: [] };
 let mediaItems = [];
 let selectedIDs = new Set();
@@ -181,6 +186,30 @@ function bindEvents() {
   logoutBtn?.addEventListener('click', async () => {
     await api('/api/logout', { method: 'POST', body: {} });
     await refreshAuthState();
+  });
+
+  pauseImportBtn?.addEventListener('click', async () => {
+    const st = latestIngestStatus;
+    if (!st) return;
+    const state = String(st.state || '').toLowerCase();
+    if (!st.paused && state !== 'scanning' && state !== 'ingesting') return;
+
+    pauseImportBtn.disabled = true;
+    try {
+      const res = await api(st.paused ? '/api/ingest/resume' : '/api/ingest/pause', {
+        method: 'POST',
+        body: {}
+      });
+      if (res?.status) {
+        ingestStatusAccepted(res.status);
+      } else {
+        await refreshIngestStatus(true);
+      }
+    } catch (err) {
+      statusChip.textContent = `Import control failed: ${err.message}`;
+    } finally {
+      renderPauseButton(latestIngestStatus);
+    }
   });
 
   clearPlaceBtn?.addEventListener('click', async () => {
@@ -1531,8 +1560,21 @@ function renderMapFull(points) {
 
 async function refreshBackupStatus() {
   if (!backupStatus) return;
-  const st = await api('/api/backup-status');
-  renderBackupStatus(st);
+  if (backupStatusRequest) {
+    return backupStatusRequest;
+  }
+  const request = api('/api/backup-status')
+    .then((st) => {
+      renderBackupStatus(st);
+      return st;
+    })
+    .finally(() => {
+      if (backupStatusRequest === request) {
+        backupStatusRequest = null;
+      }
+    });
+  backupStatusRequest = request;
+  return request;
 }
 
 function renderBackupStatus(st) {
@@ -1597,24 +1639,55 @@ function stopIngestPolling() {
   if (!ingestPoller) return;
   clearInterval(ingestPoller);
   ingestPoller = undefined;
+  ingestStatusRequest = null;
+  backupStatusRequest = null;
+  latestIngestUpdatedAt = '';
+  latestIngestStatus = null;
+  renderPauseButton(null);
 }
 
-async function refreshIngestStatus() {
+async function refreshIngestStatus(force = false) {
   if (!ingestWidget) return;
-  const st = await api('/api/ingest-status');
-  renderIngestStatus(st);
+  if (ingestStatusRequest && !force) {
+    return ingestStatusRequest;
+  }
+  const request = api('/api/ingest-status')
+    .then((st) => {
+      ingestStatusAccepted(st);
+      return st;
+    })
+    .finally(() => {
+      if (ingestStatusRequest === request) {
+        ingestStatusRequest = null;
+      }
+    });
+  ingestStatusRequest = request;
+  return request;
 }
 
 function renderIngestStatus(st) {
   const state = (st.state || 'idle').toLowerCase();
-  const phase = st.phase || '';
+  const paused = Boolean(st.paused);
 
   let title = 'Idle';
   let label = 'Idle';
   let sub = 'Waiting for USB...';
   let p = 0;
 
-  if (state === 'scanning') {
+  if (paused) {
+    title = 'Paused';
+    label = '||';
+    p = Number(st.percent || 0);
+    if (state === 'ingesting') {
+      const total = st.total_files || 0;
+      const done = st.processed_files || 0;
+      sub = `${done}/${total} files | import paused`;
+    } else if (state === 'scanning') {
+      sub = `${st.total_files || 0} files found | scan paused`;
+    } else {
+      sub = 'Import paused';
+    }
+  } else if (state === 'scanning') {
     title = 'Scanning';
     label = '...';
     sub = `${st.total_files || 0} files found`;
@@ -1647,6 +1720,40 @@ function renderIngestStatus(st) {
 
   // Tooltip with current file path if available.
   if (ingestWidget) ingestWidget.title = st.current_path || '';
+  renderPauseButton(st);
+}
+
+function ingestStatusAccepted(st) {
+  if (!shouldUseIngestStatus(st)) return;
+  latestIngestStatus = st;
+  latestIngestUpdatedAt = normalizeTimestamp(st?.updated_at);
+  renderIngestStatus(st);
+}
+
+function shouldUseIngestStatus(st) {
+  const incoming = normalizeTimestamp(st?.updated_at);
+  if (!incoming) return true;
+  if (!latestIngestUpdatedAt) return true;
+  return incoming >= latestIngestUpdatedAt;
+}
+
+function normalizeTimestamp(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return '';
+  return new Date(ms).toISOString();
+}
+
+function renderPauseButton(st) {
+  if (!pauseImportBtn) return;
+  const state = String(st?.state || 'idle').toLowerCase();
+  const paused = Boolean(st?.paused);
+  const active = paused || state === 'scanning' || state === 'ingesting';
+
+  pauseImportBtn.classList.toggle('hidden', !active);
+  pauseImportBtn.disabled = !active;
+  pauseImportBtn.textContent = paused ? 'Resume Import' : 'Pause Import';
 }
 
 function formatMBps(value) {

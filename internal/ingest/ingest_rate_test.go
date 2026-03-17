@@ -93,6 +93,48 @@ func TestProcessMountReportsLiveMBps(t *testing.T) {
 	}
 }
 
+func TestPauseResumeUpdatesStatus(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "data", "usbvault.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	manager := NewManager(store, audit.New(store), geocode.New(store), log.New(io.Discard, "", 0))
+	manager.setStatus(Status{
+		State:     "ingesting",
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message:   "Ingesting media...",
+	})
+
+	if !manager.Pause() {
+		t.Fatal("Pause returned false, want true")
+	}
+	st := manager.GetStatus()
+	if !st.Paused {
+		t.Fatal("status paused = false, want true")
+	}
+	if st.Message != "Import paused" {
+		t.Fatalf("status message = %q, want %q", st.Message, "Import paused")
+	}
+
+	if !manager.Resume() {
+		t.Fatal("Resume returned false, want true")
+	}
+	st = manager.GetStatus()
+	if st.Paused {
+		t.Fatal("status paused = true, want false")
+	}
+	if st.Message != "Ingesting media..." {
+		t.Fatalf("status message = %q, want %q", st.Message, "Ingesting media...")
+	}
+}
+
 func createTestMediaFile(path string, mebibytes int, fill byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {

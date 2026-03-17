@@ -55,17 +55,21 @@ html, body {
 }
 
 .topbar {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 20px;
-  align-items: flex-start;
+  align-items: start;
   margin-bottom: 20px;
+}
+
+.topbar > :first-child {
+  min-width: 0;
 }
 
 .top-status {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-end;
   flex-wrap: wrap;
 }
@@ -78,6 +82,8 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 10px 12px;
+  min-width: 360px;
+  min-height: 72px;
 }
 
 .ring {
@@ -115,20 +121,25 @@ html, body {
   display: grid;
   gap: 2px;
   min-width: 220px;
+  min-height: 48px;
 }
 
 .ingest-title {
   font-size: 0.92rem;
   font-weight: 800;
+  line-height: 1.2;
+  min-height: 1.2em;
 }
 
 .ingest-sub {
   font-size: 0.84rem;
   color: var(--muted);
-  white-space: nowrap;
+  white-space: normal;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 320px;
+  max-width: 360px;
+  line-height: 1.25;
+  min-height: 2.4em;
+  font-variant-numeric: tabular-nums;
 }
 
 .topbar h1 {
@@ -148,6 +159,10 @@ html, body {
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 0.86rem;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .card {
@@ -666,6 +681,15 @@ button.active {
 @media (max-width: 900px) {
   .shell {
     padding: 16px;
+  }
+
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .ingest-widget {
+    min-width: 0;
+    width: 100%;
   }
 
   .layout {
