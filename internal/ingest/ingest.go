@@ -659,10 +659,16 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	if info.Size() == 0 {
 		return nil
 	}
+	fileSize := info.Size()
+	if fileSize <= 0 {
+		fileSize = 1
+	}
+	hashFileWeight := 0.5 / float64(fileSize)
+	copyFileWeight := 0.5 / float64(fileSize)
 
 	crcHex, shaHex, err := media.ComputeHashesWithProgress(srcPath, func(n int64) {
 		_ = m.waitIfPaused(ctx)
-		m.recordRateSample(n, 0)
+		m.recordRateSample(n, float64(n)*hashFileWeight)
 	})
 	if err != nil {
 		return err
@@ -680,7 +686,7 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	}
 	if exists {
 		result.Duplicates++
-		m.recordRateSample(0, 1)
+		m.recordRateSample(0, 0.5)
 		_ = m.audit.Log(ctx, actor, "duplicate_skipped", map[string]any{
 			"source_path":  srcPath,
 			"crc32":        crcHex,
@@ -729,16 +735,12 @@ func (m *Manager) ingestFile(ctx context.Context, mountPath, baseStorage, layout
 	if err != nil {
 		return err
 	}
-	fileSize := info.Size()
-	if fileSize <= 0 {
-		fileSize = 1
-	}
 	var copiedThisFile int64
 	if err := copyFileAtomic(srcPath, destPath, info.Mode(), info.ModTime(), func(n int64) {
 		_ = m.waitIfPaused(ctx)
 		copiedThisFile += n
 		m.addCopiedBytes(n)
-		m.recordRateSample(0, float64(n)/float64(fileSize))
+		m.recordRateSample(0, float64(n)*copyFileWeight)
 	}); err != nil {
 		if copiedThisFile > 0 {
 			m.addCopiedBytes(-copiedThisFile)
