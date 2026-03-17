@@ -126,6 +126,12 @@ type Album struct {
 	ItemCount int64  `json:"item_count"`
 }
 
+type AlbumMediaLink struct {
+	ID       int64
+	FileName string
+	DestPath string
+}
+
 type LocationGroup struct {
 	Name   string          `json:"name"`
 	Count  int64           `json:"count"`
@@ -924,6 +930,34 @@ func (s *Store) RemoveMediaFromAlbum(ctx context.Context, albumID int64, ids []i
 		return removed, skipped, err
 	}
 	return removed, skipped, nil
+}
+
+func (s *Store) ListAlbumMediaLinks(ctx context.Context, albumID int64) ([]AlbumMediaLink, error) {
+	if albumID <= 0 {
+		return nil, errors.New("invalid album_id")
+	}
+
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT m.id, m.file_name, m.dest_path
+		FROM album_items ai
+		INNER JOIN media_files m ON m.id = ai.media_id
+		WHERE ai.album_id = ?
+		ORDER BY LOWER(m.file_name) ASC, m.id ASC
+	`, albumID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]AlbumMediaLink, 0)
+	for rows.Next() {
+		var item AlbumMediaLink
+		if err := rows.Scan(&item.ID, &item.FileName, &item.DestPath); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListMapPoints(ctx context.Context, limit int) ([]MapPoint, error) {

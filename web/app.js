@@ -80,6 +80,7 @@ const albumList = document.querySelector('#albumList');
 const autoAlbumStateList = document.querySelector('#autoAlbumStateList');
 const newAlbumNameInput = document.querySelector('#newAlbumNameInput');
 const createAlbumBtn = document.querySelector('#createAlbumBtn');
+const openAlbumFolderBtn = document.querySelector('#openAlbumFolderBtn');
 const addSelectedToAlbumBtn = document.querySelector('#addSelectedToAlbumBtn');
 const removeSelectedFromAlbumBtn = document.querySelector('#removeSelectedFromAlbumBtn');
 
@@ -355,6 +356,25 @@ function bindEvents() {
       await loadDashboardData();
     } catch (err) {
       statusChip.textContent = `Create album failed: ${err.message}`;
+    }
+  });
+
+  openAlbumFolderBtn?.addEventListener('click', async () => {
+    if (!activeAlbumID) {
+      statusChip.textContent = 'Select an album first.';
+      return;
+    }
+    try {
+      const res = await api(`/api/albums/${activeAlbumID}/open-folder`, { method: 'POST', body: {} });
+      const linkedCount = Number(res?.linked_count || 0);
+      const missingCount = Number(res?.missing_count || 0);
+      const parts = [`Opened album folder with ${linkedCount} linked file${linkedCount === 1 ? '' : 's'}`];
+      if (missingCount > 0) {
+        parts.push(`${missingCount} missing source file${missingCount === 1 ? '' : 's'} skipped`);
+      }
+      statusChip.textContent = parts.join('; ') + '.';
+    } catch (err) {
+      statusChip.textContent = `Open album folder failed: ${err.message}`;
     }
   });
 
@@ -880,6 +900,7 @@ function renderViewModeState() {
   viewAlbumsBtn?.classList.toggle('active', albumsMode);
   albumActions?.classList.toggle('hidden', !albumsMode);
   albumViewPanel?.classList.toggle('hidden', !albumsMode);
+  openAlbumFolderBtn?.classList.toggle('hidden', !(albumsMode && activeAlbumID > 0));
   removeSelectedFromAlbumBtn?.classList.toggle('hidden', !(albumsMode && activeAlbumID > 0));
 }
 

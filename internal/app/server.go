@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -188,6 +190,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/albums", a.withAuth(a.handleAlbumsCreate))
 	mux.HandleFunc("POST /api/albums/{id}/add", a.withAuth(a.handleAlbumAdd))
 	mux.HandleFunc("POST /api/albums/{id}/remove", a.withAuth(a.handleAlbumRemove))
+	mux.HandleFunc("POST /api/albums/{id}/open-folder", a.withAuth(a.handleAlbumOpenFolder))
 	mux.HandleFunc("GET /api/map", a.withAuth(a.handleMap))
 	mux.HandleFunc("GET /api/device-groups", a.withAuth(a.handleDeviceGroups))
 	mux.HandleFunc("GET /api/location-groups", a.withAuth(a.handleLocationGroups))
@@ -876,6 +879,50 @@ func (a *App) handleAlbumRemove(w http.ResponseWriter, r *http.Request, authCtx 
 	})
 }
 
+func (a *App) handleAlbumOpenFolder(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
+	albumID, ok := parsePathInt64(r.PathValue("id"))
+	if !ok || albumID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid album id"})
+		return
+	}
+
+	album, err := a.store.GetAlbumByID(r.Context(), albumID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "album lookup failed"})
+		return
+	}
+	if album == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "album not found"})
+		return
+	}
+
+	folderPath, linked, missing, err := a.materializeAlbumFolder(r.Context(), album)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := openFolderInFileBrowser(folderPath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	_ = a.audit.Log(r.Context(), authCtx.Username, "album_folder_opened", map[string]any{
+		"album_id":      album.ID,
+		"album_name":    album.Name,
+		"folder_path":   folderPath,
+		"linked_count":  linked,
+		"missing_count": missing,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"album_id":      album.ID,
+		"album_name":    album.Name,
+		"folder_path":   folderPath,
+		"linked_count":  linked,
+		"missing_count": missing,
+	})
+}
+
 func (a *App) handleMap(w http.ResponseWriter, r *http.Request, authCtx *AuthContext) {
 	_ = authCtx
 	filter, err := mediaFilterFromRequest(r)
@@ -1524,6 +1571,167 @@ func buildArchiveEntryName(rec db.MediaRecord, used map[string]struct{}) string 
 	fallback := path.Join(append(parts, fmt.Sprintf("%d_%d%s", rec.ID, time.Now().UnixNano(), ext))...)
 	used[fallback] = struct{}{}
 	return fallback
+}
+
+func (a *App) materializeAlbumFolder(ctx context.Context, album *db.Album) (string, int, int, error) {
+	if album == nil || album.ID <= 0 {
+		return "", 0, 0, errors.New("invalid album")
+	}
+
+	items, err := a.store.ListAlbumMediaLinks(ctx, album.ID)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("list album media: %w", err)
+	}
+
+	rootDir := filepath.Join(config.DataDir(), "album-folders")
+	if err := os.MkdirAll(rootDir, 0o750); err != nil {
+		return "", 0, 0, fmt.Errorf("create album folder root: %w", err)
+	}
+
+	folderPath := filepath.Join(rootDir, albumFolderDirName(album))
+	if err := os.MkdirAll(folderPath, 0o750); err != nil {
+		return "", 0, 0, fmt.Errorf("create album folder: %w", err)
+	}
+
+	desired := make(map[string]string, len(items))
+	usedNames := make(map[string]struct{}, len(items))
+	linked := 0
+	missing := 0
+	for _, item := range items {
+		targetPath := filepath.Clean(strings.TrimSpace(item.DestPath))
+		if targetPath == "" {
+			missing++
+			continue
+		}
+		if _, err := os.Stat(targetPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				missing++
+				continue
+			}
+			return "", 0, 0, fmt.Errorf("check media path %q: %w", targetPath, err)
+		}
+
+		linkName := uniqueAlbumLinkName(item.FileName, usedNames)
+		desired[linkName] = targetPath
+		linked++
+	}
+
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("read album folder: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, keep := desired[name]; keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(folderPath, name)); err != nil {
+			return "", 0, 0, fmt.Errorf("remove stale album link %q: %w", name, err)
+		}
+	}
+
+	for name, targetPath := range desired {
+		linkPath := filepath.Join(folderPath, name)
+		currentTarget, err := os.Readlink(linkPath)
+		if err == nil {
+			if filepath.Clean(currentTarget) == targetPath {
+				continue
+			}
+			if err := os.Remove(linkPath); err != nil {
+				return "", 0, 0, fmt.Errorf("replace album link %q: %w", name, err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Lstat(linkPath); statErr == nil {
+				if err := os.RemoveAll(linkPath); err != nil {
+					return "", 0, 0, fmt.Errorf("replace album entry %q: %w", name, err)
+				}
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return "", 0, 0, fmt.Errorf("inspect album entry %q: %w", name, statErr)
+			}
+		}
+
+		if err := os.Symlink(targetPath, linkPath); err != nil && !errors.Is(err, os.ErrExist) {
+			return "", 0, 0, fmt.Errorf("create album link %q: %w", name, err)
+		}
+	}
+
+	return folderPath, linked, missing, nil
+}
+
+func openFolderInFileBrowser(folderPath string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", folderPath)
+	case "windows":
+		cmd = exec.Command("explorer", folderPath)
+	default:
+		cmd = exec.Command("xdg-open", folderPath)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open album folder: %w", err)
+	}
+	return nil
+}
+
+func albumFolderDirName(album *db.Album) string {
+	base := sanitizeFilesystemName(album.Name)
+	if base == "" {
+		base = "album"
+	}
+	return fmt.Sprintf("%s-%d", base, album.ID)
+}
+
+func uniqueAlbumLinkName(raw string, used map[string]struct{}) string {
+	name := sanitizeFilesystemName(raw)
+	if name == "" {
+		name = "media"
+	}
+
+	ext := filepath.Ext(name)
+	base := strings.TrimSpace(strings.TrimSuffix(name, ext))
+	if base == "" {
+		base = "media"
+	}
+
+	candidate := base + ext
+	if _, exists := used[candidate]; !exists {
+		used[candidate] = struct{}{}
+		return candidate
+	}
+
+	for i := 2; ; i++ {
+		candidate = fmt.Sprintf("%s (%d)%s", base, i, ext)
+		if _, exists := used[candidate]; exists {
+			continue
+		}
+		used[candidate] = struct{}{}
+		return candidate
+	}
+}
+
+func sanitizeFilesystemName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	name = replacer.Replace(name)
+	name = strings.ReplaceAll(name, "\r", "_")
+	name = strings.ReplaceAll(name, "\n", "_")
+	name = strings.Trim(name, " .")
+	return name
 }
 
 func sanitizeArchiveSegment(name string) string {
