@@ -41,6 +41,14 @@ Open [http://127.0.0.1:4987](http://127.0.0.1:4987).
 
 Use the platform service manager so USB Vault does not tie up a terminal.
 
+### Standalone verified MP4 drop folder
+
+A separate macOS utility under `scripts/macos/video-drop-converter` watches a
+Finder drop folder, converts non-MP4 video with Apple VideoToolbox hardware
+H.264, fully verifies the result, deduplicates by SHA-256, and preserves and
+sequentially renames both the mounted-drive original and intake copy. See its
+local README for installation and operating details.
+
 - Full guide: `docs/run-as-service.md`
 
 ### macOS (launchd)
@@ -200,4 +208,5 @@ Use **Backup Export** to avoid creating a second full local archive:
 - `internal/audit` - audit hash chain
 - `web` - hosted GUI assets
 - `scripts/macos` - app packaging and launchd helpers
+- `scripts/macos/video-drop-converter` - verified hardware MP4 drop-folder service
 - `scripts/pi` - Pi build/install/systemd helpers
